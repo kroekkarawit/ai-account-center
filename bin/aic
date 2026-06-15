@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.2.1"
+APP_VERSION="0.8.8"
 DATA_DIR="${AIC_DATA_DIR:-$HOME/.ai-account-center}"
 CODEX_HOME_DIR="${AIC_CODEX_HOME:-$HOME/.codex}"
 CONFIG_FILE="$DATA_DIR/config.json"
@@ -24,7 +24,11 @@ if [[ -t 1 ]]; then
   RED=$'\033[31m'
   GREEN=$'\033[32m'
   YELLOW=$'\033[33m'
+  BLUE=$'\033[34m'
+  MAGENTA=$'\033[35m'
   CYAN=$'\033[36m'
+  WHITE=$'\033[37m'
+  REVERSE=$'\033[7m'
   RESET=$'\033[0m'
 else
   BOLD=""
@@ -32,9 +36,64 @@ else
   RED=""
   GREEN=""
   YELLOW=""
+  BLUE=""
+  MAGENTA=""
   CYAN=""
+  WHITE=""
+  REVERSE=""
   RESET=""
 fi
+
+supports_utf8() {
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8*|*utf8*|*UTF8*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+menu_icon() {
+  local name="$1"
+  if supports_utf8; then
+    case "$name" in
+      codex-switch) printf '◆' ;;
+      codex-open) printf '▶' ;;
+      codex-add) printf '＋' ;;
+      codex-import) printf '⇢' ;;
+      claude-login) printf '◇' ;;
+      claude-import) printf '⇠' ;;
+      claude-token) printf '◈' ;;
+      refresh) printf '↻' ;;
+      schedule) printf '⏱' ;;
+      remove) printf '×' ;;
+      list) printf '☷' ;;
+      help) printf '?' ;;
+      exit) printf '⌫' ;;
+      *) printf '•' ;;
+    esac
+  else
+    case "$name" in
+      codex-switch) printf 'C>' ;;
+      codex-open) printf 'C$' ;;
+      codex-add) printf 'C+' ;;
+      codex-import) printf 'C<' ;;
+      claude-login) printf 'A+' ;;
+      claude-import) printf 'A<' ;;
+      claude-token) printf 'A#' ;;
+      refresh) printf 'R*' ;;
+      schedule) printf 'T~' ;;
+      remove) printf 'X-' ;;
+      list) printf 'L=' ;;
+      help) printf '??' ;;
+      exit) printf 'Q!' ;;
+      *) printf '--' ;;
+    esac
+  fi
+}
+
+menu_item() {
+  local icon="$1" text="$2" action="$3"
+  printf '%s  %s::%s' "$(menu_icon "$icon")" "$text" "$action"
+}
 
 die() {
   printf '%sError:%s %s\n' "$RED" "$RESET" "$*" >&2
@@ -66,6 +125,9 @@ ensure_dirs() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
     cat >"$CONFIG_FILE.tmp" <<'JSON'
 {
+  "display": {
+    "timezone": "Asia/Bangkok"
+  },
   "schedule": {
     "enabled": false,
     "interval_minutes": 60
@@ -130,6 +192,42 @@ clear_active_codex_name() {
     die "Could not update state."
   chmod 600 "$STATE_FILE.tmp"
   mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+codex_name_for_account_id() {
+  local account_id="$1" file
+  [[ -n "$account_id" ]] || return 1
+  for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    if [[ "$(codex_account_id "$file")" == "$account_id" ]]; then
+      basename "$file" .json
+      return 0
+    fi
+  done
+  return 1
+}
+
+reconcile_active_codex() {
+  local auth="$CODEX_HOME_DIR/auth.json"
+  [[ -f "$auth" ]] || return 0
+  validate_codex_auth "$auth" || return 0
+
+  local live_id active active_file matched
+  live_id="$(codex_account_id "$auth")"
+  active="$(active_codex_name)"
+  if [[ -n "$active" ]]; then
+    active_file="$(codex_account_file "$active")"
+    if [[ -f "$active_file" && "$(codex_account_id "$active_file")" == "$live_id" ]]; then
+      return 0
+    fi
+  fi
+
+  matched="$(codex_name_for_account_id "$live_id" || true)"
+  if [[ -n "$matched" ]]; then
+    set_active_codex_name "$matched"
+  else
+    clear_active_codex_name
+  fi
 }
 
 with_lock() {
@@ -225,6 +323,219 @@ save_live_codex_as() {
   printf 'Saved Codex account: %s%s\n' "$name" "${email:+ ($email)}"
 }
 
+save_codex_auth_file_as() {
+  local name="$1" source="$2"
+  validate_name "$name"
+  [[ -f "$source" ]] || die "Auth JSON file not found: $source"
+  validate_codex_auth "$source" || die "The provided Codex auth JSON has an unsupported format."
+
+  local destination current_id duplicate
+  destination="$(codex_account_file "$name")"
+  current_id="$(codex_account_id "$source")"
+  duplicate="$(
+    for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+      [[ -e "$file" ]] || continue
+      if [[ "$(codex_account_id "$file")" == "$current_id" && "$file" != "$destination" ]]; then
+        basename "$file" .json
+        break
+      fi
+    done
+  )"
+  [[ -z "$duplicate" ]] || die "This Codex account is already stored as '$duplicate'."
+
+  cp "$source" "$destination.tmp"
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+
+  local email
+  email="$(codex_email "$destination")"
+  printf 'Imported Codex account: %s%s\n' "$name" "${email:+ ($email)}"
+}
+
+import_codex_auth_json() {
+  local name="$1" source="${2:-}" temp=""
+  validate_name "$name"
+
+  if [[ -n "$source" ]]; then
+    save_codex_auth_file_as "$name" "$source"
+    return
+  fi
+
+  temp="$RUNTIME_DIR/import-codex-$name-$$.json"
+  printf 'Paste Codex auth.json for %s. The import starts automatically when the JSON object is complete.\n' "$name" >&2
+  printf 'Cancel: Ctrl-C, Ctrl-D, q, :q, quit, or exit. Clear pasted text: Ctrl-U.\n' >&2
+  printf 'Safer for very large files: aic codex import %s /path/to/auth.json\n' "$name" >&2
+  if ! read_json_object "$temp"; then
+    rm -f "$temp"
+    printf 'Import cancelled.\n' >&2
+    return 1
+  fi
+  chmod 600 "$temp"
+  save_codex_auth_file_as "$name" "$temp"
+  rm -f "$temp"
+}
+
+read_json_object() {
+  local destination="$1"
+  : >"$destination"
+
+  local started=0 depth=0 in_string=0 escaped=0 char command_line="" buffer=""
+  local old_stty="" raw_enabled=0 cancelled=0 read_status=0
+
+  if [[ -t 0 ]]; then
+    old_stty="$(stty -g 2>/dev/null || true)"
+    if [[ -n "$old_stty" ]] && stty -icanon -echo -isig min 1 time 0 2>/dev/null; then
+      raw_enabled=1
+      printf 'Reading paste... chars: 0\r' >&2
+    fi
+  fi
+
+  restore_terminal() {
+    if ((raw_enabled)) && [[ -n "$old_stty" ]]; then
+      stty "$old_stty" 2>/dev/null || true
+    fi
+  }
+
+  reset_paste_state() {
+    : >"$destination"
+    buffer=""
+    started=0
+    depth=0
+    in_string=0
+    escaped=0
+    command_line=""
+  }
+
+  replay_paste_state() {
+    local i replay_char length
+    started=0
+    depth=0
+    in_string=0
+    escaped=0
+    command_line=""
+    length=${#buffer}
+    for ((i = 0; i < length; i++)); do
+      replay_char="${buffer:i:1}"
+      update_json_state "$replay_char"
+    done
+    if ((started == 0)); then
+      command_line="${buffer##*$'\n'}"
+    else
+      command_line=""
+    fi
+  }
+
+  update_json_state() {
+    local update_char="$1"
+    if ((escaped)); then
+      escaped=0
+      return 0
+    fi
+    if [[ "$update_char" == "\\" && "$in_string" -eq 1 ]]; then
+      escaped=1
+      return 0
+    fi
+    if [[ "$update_char" == '"' ]]; then
+      if ((in_string)); then in_string=0; else in_string=1; fi
+      return 0
+    fi
+    ((in_string)) && return 0
+    case "$update_char" in
+      "{") started=1; depth=$((depth + 1)) ;;
+      "}") depth=$((depth - 1)) ;;
+    esac
+  }
+
+  print_paste_status() {
+    ((raw_enabled)) || return 0
+    printf 'Reading paste... chars: %-8d\r' "${#buffer}" >&2
+  }
+
+  while IFS= read -r -n 1 char; do
+    case "$char" in
+      $'\003')
+        cancelled=1
+        read_status=130
+        break
+        ;;
+      $'\004')
+        read_status=1
+        break
+        ;;
+      $'\025')
+        reset_paste_state
+        printf '\nPaste buffer cleared. Paste Codex auth.json again, or press Ctrl-C to cancel.\n' >&2
+        print_paste_status
+        continue
+        ;;
+      $'\177'|$'\010')
+        if [[ -n "$buffer" ]]; then
+          buffer="${buffer%?}"
+          replay_paste_state
+          print_paste_status
+        fi
+        continue
+        ;;
+      $'\033')
+        local rest=""
+        IFS= read -r -s -n 2 -t 0.05 rest || true
+        if [[ "$rest" == "[3" ]]; then
+          local suffix=""
+          IFS= read -r -s -n 1 -t 0.05 suffix || true
+        fi
+        continue
+        ;;
+      $'\r')
+        char=$'\n'
+        ;;
+    esac
+
+    if ((started == 0)); then
+      if [[ "$char" == $'\n' ]]; then
+        case "$command_line" in
+          q|:q|quit|exit)
+            read_status=1
+            break
+            ;;
+        esac
+        command_line=""
+      else
+        command_line+="$char"
+      fi
+    fi
+
+    buffer+="$char"
+    update_json_state "$char"
+    print_paste_status
+
+    if ((started && depth <= 0 && in_string == 0)); then
+      break
+    fi
+  done
+  if ((cancelled)); then
+    read_status=130
+  elif ((started == 0 && depth == 0)); then
+    read_status=1
+  fi
+  restore_terminal
+  trap - INT
+
+  if ((read_status != 0)); then
+    return 1
+  fi
+
+  if ((started == 0)); then
+    die "No JSON object was pasted."
+  fi
+  if ((depth > 0 || in_string == 1)); then
+    die "Pasted JSON is incomplete. Paste the full auth.json, or use: aic codex import NAME /path/to/auth.json"
+  fi
+  printf '%s' "$buffer" >"$destination"
+  if ! jq -e . "$destination" >/dev/null 2>&1; then
+    die "Pasted content is not valid JSON. Tip: use 'aic codex import NAME /path/to/auth.json' for very large files."
+  fi
+}
+
 sync_active_codex() {
   local active auth destination
   active="$(active_codex_name)"
@@ -239,6 +550,14 @@ sync_active_codex() {
     cp "$auth" "$destination.tmp"
     chmod 600 "$destination.tmp"
     mv -f "$destination.tmp" "$destination"
+  else
+    local matched
+    matched="$(codex_name_for_account_id "$(codex_account_id "$auth")" || true)"
+    if [[ -n "$matched" ]]; then
+      set_active_codex_name "$matched"
+    else
+      clear_active_codex_name
+    fi
   fi
 }
 
@@ -262,37 +581,6 @@ switch_codex_impl() {
   printf 'Active Codex account: %s\n' "$name"
 }
 
-login_codex_impl() {
-  local name="$1"
-  validate_name "$name"
-  require_command codex
-
-  sync_active_codex
-  backup_live_auth
-  local previous=""
-  if [[ -f "$CODEX_HOME_DIR/auth.json" ]]; then
-    previous="$RUNTIME_DIR/auth-before-login-$$.json"
-    cp "$CODEX_HOME_DIR/auth.json" "$previous"
-    chmod 600 "$previous"
-  fi
-
-  printf 'Starting Codex device login for account: %s\n' "$name"
-  if ! CODEX_HOME="$CODEX_HOME_DIR" codex logout >/dev/null 2>&1; then
-    warn "Codex logout returned an error; continuing with login."
-  fi
-  if ! CODEX_HOME="$CODEX_HOME_DIR" codex login --device-auth; then
-    if [[ -n "$previous" && -f "$previous" ]]; then
-      cp "$previous" "$CODEX_HOME_DIR/auth.json.tmp"
-      chmod 600 "$CODEX_HOME_DIR/auth.json.tmp"
-      mv -f "$CODEX_HOME_DIR/auth.json.tmp" "$CODEX_HOME_DIR/auth.json"
-    fi
-    rm -f "$previous"
-    die "Codex login failed. Previous auth was restored when available."
-  fi
-  rm -f "$previous"
-  save_live_codex_as "$name"
-}
-
 remove_codex_impl() {
   local name="$1"
   validate_name "$name"
@@ -301,10 +589,13 @@ remove_codex_impl() {
   [[ -f "$file" ]] || die "Unknown Codex account: $name"
   active="$(active_codex_name)"
   if [[ "$active" == "$name" ]]; then
-    die "Cannot remove the active account. Switch to another account first."
+    clear_active_codex_name
   fi
   rm -f "$file" "$(usage_file codex "$name")"
   printf 'Removed Codex account: %s\n' "$name"
+  if [[ "$active" == "$name" ]]; then
+    printf 'The live %s/auth.json was left unchanged.\n' "$CODEX_HOME_DIR"
+  fi
 }
 
 add_claude_token() {
@@ -387,6 +678,18 @@ iso_from_epoch() {
   fi
 }
 
+epoch_from_iso() {
+  local iso="$1" normalized epoch
+  normalized="${iso%%.*}"
+  normalized="${normalized%Z}"
+  normalized="${normalized%%+*}"
+  if epoch="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%S' "$normalized" +%s 2>/dev/null)"; then
+    printf '%s' "$epoch"
+  else
+    date -u -d "$iso" +%s 2>/dev/null
+  fi
+}
+
 write_error_usage() {
   local provider="$1" name="$2" message="$3"
   local destination
@@ -431,7 +734,7 @@ refresh_codex_account() {
   CODEX_HOME="$runtime" node "$helper" "$timeout_seconds" \
     >"$output" 2>"$output.stderr" || status=$?
 
-  if [[ -f "$runtime/auth.json" ]] && validate_codex_auth "$runtime/auth.json"; then
+  if [[ "$status" -eq 0 && -f "$runtime/auth.json" ]] && validate_codex_auth "$runtime/auth.json"; then
     cp "$runtime/auth.json" "$source.tmp"
     chmod 600 "$source.tmp"
     mv -f "$source.tmp" "$source"
@@ -649,33 +952,117 @@ refresh_all() {
   [[ "$failures" -eq 0 ]]
 }
 
-format_reset() {
+reset_epoch() {
   local file="$1" window="$2"
-  local value epoch
+  local value epoch timezone
   value="$(jq -r --arg window "$window" '.limits[$window].resets_at // empty' "$file" 2>/dev/null)"
   epoch="$(jq -r --arg window "$window" '.limits[$window].resets_at_epoch // empty' "$file" 2>/dev/null)"
   if [[ -n "$value" ]]; then
-    printf '%s' "$value" | sed -E 's/T/ /; s/(\.[0-9]+)?([+-][0-9:]+|Z)$//'
-  elif [[ -n "$epoch" ]]; then
-    iso_from_epoch "$epoch" | sed -E 's/T/ /; s/Z$//'
-  else
-    printf '-'
+    epoch="$(epoch_from_iso "$value")"
   fi
+  printf '%s' "$epoch"
+}
+
+format_reset() {
+  local file="$1" window="$2" style="$3"
+  local epoch timezone format
+  timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
+  epoch="$(reset_epoch "$file" "$window")"
+  [[ -n "$epoch" ]] || {
+    printf '-'
+    return
+  }
+
+  if [[ "$style" == "time" ]]; then
+    format='+%H:%M'
+  else
+    format='+%b %d, %H:%M'
+  fi
+  TZ="$timezone" date -r "$epoch" "$format" 2>/dev/null ||
+    TZ="$timezone" date -d "@$epoch" "$format" 2>/dev/null
+}
+
+quota_color() {
+  local used="$1"
+  if [[ ! "$used" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s' "$DIM"
+  elif awk "BEGIN { exit !($used >= 90) }"; then
+    printf '%s' "$RED"
+  elif awk "BEGIN { exit !($used >= 70) }"; then
+    printf '%s' "$YELLOW"
+  else
+    printf '%s' "$GREEN"
+  fi
+}
+
+quota_bar() {
+  local used="$1" width=10 filled=0
+  if [[ "$used" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    filled="$(awk -v value="$used" -v width="$width" \
+      'BEGIN { n=int((value * width / 100) + 0.5); if(n<0)n=0; if(n>width)n=width; print n }')"
+  fi
+  local empty=$((width - filled))
+  local i
+  for ((i = 0; i < filled; i++)); do printf '█'; done
+  for ((i = 0; i < empty; i++)); do printf '░'; done
+}
+
+format_quota_badge() {
+  local label="$1" used="$2" reset="$3"
+  if [[ ! "$used" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s[%s ░░░░░░░░░░  -- → %s]%s' "$DIM" "$label" "$reset" "$RESET"
+    return
+  fi
+  local color bar
+  color="$(quota_color "$used")"
+  bar="$(quota_bar "$used")"
+  printf '%s[%s %s %3.0f%% → %s]%s' "$color" "$label" "$bar" "$used" "$reset" "$RESET"
+}
+
+uppercase() {
+  printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+print_dashboard_header() {
+  local active interval enabled schedule_text title_line state_line timezone
+  active="$(active_codex_name)"
+  interval="$(jq -r '.schedule.interval_minutes // 60' "$CONFIG_FILE")"
+  enabled="$(jq -r '.schedule.enabled // false' "$CONFIG_FILE")"
+  timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
+  if [[ "$enabled" == "true" ]]; then
+    schedule_text="every ${interval}m"
+  else
+    schedule_text="disabled"
+  fi
+
+  title_line="AI ACCOUNT CENTER  v$APP_VERSION"
+  state_line="Active Codex: ${active:-none}  |  Monitor: $schedule_text  |  TZ: $timezone"
+  printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
+  printf '%s|%s %s%-76s%s %s|%s\n' \
+    "$CYAN" "$RESET" "$BOLD" "$title_line" "$RESET" "$CYAN" "$RESET"
+  printf '%s|%s %-76s %s|%s\n' \
+    "$CYAN" "$RESET" "$state_line" "$CYAN" "$RESET"
+  printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
 }
 
 print_status() {
   local active
   active="$(active_codex_name)"
   local errors=()
-  printf '%s%-8s %-18s %-8s %-9s %-17s %-17s%s\n' \
-    "$BOLD" "TYPE" "ACCOUNT" "5H LEFT" "WEEK LEFT" "5H RESET (UTC)" "WEEK RESET (UTC)" "$RESET"
+  printf '%s%-9s %-19s %-29s %-38s%s\n' \
+    "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR LIMIT" "7-DAY LIMIT" "$RESET"
+  printf '%s%-9s %-19s %-29s %-38s%s\n' \
+    "$DIM" "--------" "------------------" "----------------------------" "-------------------------------------" "$RESET"
 
-  local provider dir file name usage marker status five week reset5 resetw
+  local provider provider_label provider_color dir file name usage marker status five week reset5 resetw
   for provider in codex claude; do
+    provider_label="$(uppercase "$provider")"
     if [[ "$provider" == "codex" ]]; then
       dir="$CODEX_ACCOUNTS_DIR"
+      provider_color="$CYAN"
     else
       dir="$CLAUDE_ACCOUNTS_DIR"
+      provider_color="$MAGENTA"
     fi
 
     for file in "$dir"/*.json; do
@@ -683,11 +1070,12 @@ print_status() {
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
       marker=" "
-      [[ "$provider" == "codex" && "$active" == "$name" ]] && marker="*"
+      [[ "$provider" == "codex" && "$active" == "$name" ]] && marker=">"
 
       if [[ ! -f "$usage" ]]; then
-        printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
-          "$provider" "$marker" "$name" "-" "-" "not checked" "-"
+        printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
+        printf '%s%-29s %-38s%s\n' \
+          "$DIM" "[5h ░░░░░░░░░░  -- → -]" "[7d ░░░░░░░░░░  -- → -]" "$RESET"
         continue
       fi
 
@@ -696,27 +1084,29 @@ print_status() {
         local full_error
         full_error="$(jq -r '.error // "unknown"' "$usage")"
         errors+=("$provider/$name: $full_error")
-        printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
-          "$provider" "$marker" "$name" "error" "error" "see below" "-"
+        printf '%s%-9s%s %s%-18s %s%-29s %-38s%s\n' \
+          "$provider_color" "$provider_label" "$RESET" "$marker" "$name" \
+          "$RED" "[5h !!!!!!!!!! ERR → -]" "[7d !!!!!!!!!! ERR → see errors]" "$RESET"
         continue
       fi
 
-      five="$(jq -r '.limits.five_hour.remaining_percent // "-"' "$usage")"
-      week="$(jq -r '.limits.weekly.remaining_percent // "-"' "$usage")"
-      reset5="$(format_reset "$usage" five_hour)"
-      resetw="$(format_reset "$usage" weekly)"
-      [[ "$five" == "-" ]] || five="${five}%"
-      [[ "$week" == "-" ]] || week="${week}%"
-      printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
-        "$provider" "$marker" "$name" "$five" "$week" "$reset5" "$resetw"
+      five="$(jq -r '.limits.five_hour.used_percent // "-"' "$usage")"
+      week="$(jq -r '.limits.weekly.used_percent // "-"' "$usage")"
+      reset5="$(format_reset "$usage" five_hour time)"
+      resetw="$(format_reset "$usage" weekly datetime)"
+      printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
+      format_quota_badge "5h" "$five" "$reset5"
+      printf ' '
+      format_quota_badge "7d" "$week" "$resetw"
+      printf '\n'
     done
   done
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
-    printf '\n%sErrors%s\n' "$BOLD" "$RESET"
+    printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
     local error
     for error in "${errors[@]}"; do
-      printf '  - %s\n' "$error"
+      printf '  %s!%s %s\n' "$RED" "$RESET" "$error"
     done
   fi
 }
@@ -747,22 +1137,69 @@ choose_from() {
   local options=("$@")
   [[ "${#options[@]}" -gt 0 ]] || return 1
 
-  if command -v fzf >/dev/null 2>&1; then
-    printf '%s\n' "${options[@]}" | fzf --prompt="$prompt > "
-    return
+  local selected=0 key rest i lines
+  lines=$((${#options[@]} + 3))
+  if [[ -t 0 ]]; then
+    exec 3<&0
+  elif [[ -r /dev/tty ]]; then
+    exec 3</dev/tty
+  else
+    return 1
   fi
 
-  printf '%s\n' "$prompt" >&2
-  local i
-  for ((i = 0; i < ${#options[@]}; i++)); do
-    printf '  %d. %s\n' "$((i + 1))" "${options[$i]}" >&2
+  option_label() {
+    local value="$1"
+    printf '%s' "${value%%::*}"
+  }
+
+  while true; do
+    printf '%s%s%s\n' "$BOLD" "$prompt" "$RESET" >&2
+    printf '%s  Use Up/Down or j/k, Enter to select, Esc/q to cancel%s\n' "$DIM" "$RESET" >&2
+    for ((i = 0; i < ${#options[@]}; i++)); do
+      local label
+      label="$(option_label "${options[$i]}")"
+      if ((i == selected)); then
+        printf '  %s%s> %-44s%s\n' "$CYAN" "$REVERSE" "$label" "$RESET" >&2
+      else
+        printf '    %-44s\n' "$label" >&2
+      fi
+    done
+    printf '\n' >&2
+
+    IFS= read -r -s -n 1 key <&3 || {
+      exec 3<&-
+      return 1
+    }
+    if [[ "$key" == $'\033' ]]; then
+      rest=""
+      IFS= read -r -s -n 2 -t 1 rest <&3 || true
+      key+="$rest"
+    fi
+
+    printf '\033[%dA\033[J' "$lines" >&2
+    case "$key" in
+      $'\033[A'|k|K)
+        selected=$(((selected - 1 + ${#options[@]}) % ${#options[@]}))
+        ;;
+      $'\033[B'|j|J)
+        selected=$(((selected + 1) % ${#options[@]}))
+        ;;
+      ""|$'\n'|$'\r')
+        exec 3<&-
+        printf '%s\n' "${options[$selected]}"
+        return 0
+        ;;
+      q|Q|$'\033')
+        exec 3<&-
+        return 1
+        ;;
+      [1-9])
+        if ((key <= ${#options[@]})); then
+          selected=$((key - 1))
+        fi
+        ;;
+    esac
   done
-  printf 'Select: ' >&2
-  local selection
-  IFS= read -r selection
-  [[ "$selection" =~ ^[0-9]+$ ]] || return 1
-  ((selection >= 1 && selection <= ${#options[@]})) || return 1
-  printf '%s\n' "${options[$((selection - 1))]}"
 }
 
 codex_names() {
@@ -771,6 +1208,294 @@ codex_names() {
     [[ -e "$file" ]] || continue
     basename "$file" .json
   done
+}
+
+claude_names() {
+  local file
+  for file in "$CLAUDE_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    basename "$file" .json
+  done
+}
+
+confirm_action() {
+  local prompt="$1" answer
+  answer="$(choose_from "$prompt" "No, cancel" "Yes, remove it")" || return 1
+  [[ "$answer" == "Yes, remove it" ]]
+}
+
+interactive_remove() {
+  local options=() item provider name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && options+=("Codex  | $name")
+  done < <(codex_names)
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && options+=("Claude | $name")
+  done < <(claude_names)
+
+  [[ "${#options[@]}" -gt 0 ]] || {
+    warn "No accounts to remove."
+    return 1
+  }
+
+  item="$(choose_from "Select account to remove" "${options[@]}")" || return 1
+  provider="${item%%|*}"
+  provider="${provider// /}"
+  name="${item#*| }"
+
+  confirm_action "Remove $provider account '$name'?" || return 1
+  if [[ "$provider" == "Codex" ]]; then
+    with_lock remove_codex_impl "$name"
+  else
+    remove_claude "$name"
+  fi
+}
+
+help_content_en() {
+  cat <<'HELP'
+AI ACCOUNT CENTER - USER GUIDE
+
+OVERVIEW
+AI Account Center stores multiple Codex account credentials, switches the
+active Codex CLI account, and monitors Codex and Claude subscription limits.
+All account data is stored locally under ~/.ai-account-center.
+
+KEYBOARD CONTROLS
+Up / Down       Move through menus or scroll this guide
+j / k           Alternative navigation keys
+PageUp/PageDown Scroll one page
+Home / End      Jump to the beginning or end
+Enter           Select the highlighted menu item
+Esc / q         Cancel or close the current screen
+
+DASHBOARD
+The > marker identifies the active Codex account stored by Account Center.
+The percentage in each badge is usage consumed, not quota remaining.
+
+  [5h ██░░░░░░░░  22% -> 18:49]
+  [7d █████████░  94% -> Jun 16, 16:50]
+
+Green means low usage, yellow means at least 70% used, and red means at least
+90% used. Reset times use Asia/Bangkok unless changed in config.json.
+
+ADD THE CURRENT CODEX ACCOUNT
+1. Login with Codex CLI normally.
+2. Open AI Account Center.
+3. Choose "Add current Codex auth.json".
+4. Enter a short account name such as personal or company.
+
+ADD ANOTHER CODEX ACCOUNT
+Login on another computer or OS user, then copy that machine's auth.json file.
+Choose "Import another Codex auth.json", enter a name, then paste the JSON content.
+The CLI form also accepts a file path:
+
+  aic codex import company ~/Downloads/company-auth.json
+
+SWITCH OR OPEN CODEX
+Choose "Switch Codex account", select an account, and press Enter. Account
+Center atomically replaces ~/.codex/auth.json. Choose "Open active Codex" to
+start the CLI with that account.
+
+Do not switch accounts while another Codex CLI process is still running.
+
+ADD A CLAUDE ACCOUNT
+"Login Claude account" runs normal Claude subscription OAuth and imports it.
+"Import current Claude login" imports an existing Claude Code login.
+"Add Claude token manually" stores a setup-token or OAuth token.
+
+MONITORING
+"Refresh all usage" updates every stored account.
+Codex usage is read from account/rateLimits/read without an inference prompt.
+Claude full OAuth uses its usage endpoint. An inference-only setup-token uses a
+one-output-token Haiku request and reads utilization from response headers.
+
+BACKGROUND SCHEDULE
+Choose "Configure schedule" and select 15m, 30m, 1h, 2h, 4h, or 6h.
+macOS uses launchd, so the terminal does not need to stay open. The computer
+must be awake and connected to the internet when the scheduled refresh runs.
+
+REMOVE AN ACCOUNT
+Choose "Remove an account", select Codex or Claude, and confirm.
+Removing an active Codex profile does not delete the live ~/.codex/auth.json
+and does not log the account out. It only removes Account Center's saved copy.
+
+COMMAND LINE SHORTCUTS
+aic status
+aic refresh
+aic codex use ACCOUNT
+aic codex run ACCOUNT
+aic codex remove ACCOUNT
+aic claude remove ACCOUNT
+aic schedule set 30m
+aic schedule off
+
+FILES
+Source code: /Users/macbookair/Desktop/Miscellaneous/ai-account-center
+Private data: ~/.ai-account-center
+Live Codex credential: ~/.codex/auth.json
+HELP
+}
+
+help_content_th() {
+  cat <<'HELP'
+AI ACCOUNT CENTER - คู่มือการใช้งาน
+
+ภาพรวม
+AI Account Center ใช้เก็บบัญชี Codex หลายบัญชี สลับบัญชีที่ Codex CLI ใช้งาน
+และตรวจสอบ limit ของ Codex กับ Claude ในที่เดียว ข้อมูลบัญชีทั้งหมดเก็บไว้ใน
+เครื่องที่ ~/.ai-account-center
+
+ปุ่มควบคุม
+ขึ้น / ลง         เลื่อนเมนูหรือเลื่อนอ่านคู่มือ
+j / k             ปุ่มสำรองสำหรับเลื่อน
+PageUp/PageDown   เลื่อนครั้งละหนึ่งหน้า
+Home / End        ไปต้นเอกสารหรือท้ายเอกสาร
+Enter             เลือกรายการที่ highlight
+Esc / q           ยกเลิกหรือปิดหน้าปัจจุบัน
+
+หน้า DASHBOARD
+เครื่องหมาย > แสดงบัญชี Codex ที่ active อยู่ใน Account Center
+เปอร์เซ็นต์ใน badge คือจำนวนที่ใช้ไปแล้ว ไม่ใช่จำนวนที่เหลือ
+
+  [5h ██░░░░░░░░  22% -> 18:49]
+  [7d █████████░  94% -> Jun 16, 16:50]
+
+สีเขียวหมายถึงใช้ไม่มาก สีเหลืองหมายถึงใช้ตั้งแต่ 70% และสีแดงหมายถึงใช้
+ตั้งแต่ 90% เวลา reset แสดงเป็น Asia/Bangkok เว้นแต่แก้ใน config.json
+
+เพิ่มบัญชี CODEX ปัจจุบัน
+1. Login ผ่าน Codex CLI ตามปกติ
+2. เปิด AI Account Center
+3. เลือก "Add current Codex auth.json"
+4. ตั้งชื่อสั้น ๆ เช่น personal หรือ company
+
+เพิ่มบัญชี CODEX อื่น
+ให้ login บนคอมอีกเครื่องหรือ OS user อื่น แล้ว copy ไฟล์ auth.json มา
+เลือก "Import another Codex auth.json" ใส่ชื่อ แล้วแปะ JSON auth ทั้งไฟล์
+ถ้าใช้ CLI สามารถ import จาก path ได้:
+
+  aic codex import company ~/Downloads/company-auth.json
+
+สลับหรือเปิด CODEX
+เลือก "Switch Codex account" เลือกบัญชีแล้วกด Enter ระบบจะเปลี่ยน
+~/.codex/auth.json แบบ atomic จากนั้นเลือก "Open active Codex" เพื่อเปิด CLI
+
+อย่าสลับบัญชีขณะที่ยังมี Codex CLI process อื่นกำลังทำงานอยู่
+
+เพิ่มบัญชี CLAUDE
+"Login Claude account" ใช้ Claude subscription OAuth และ import ให้อัตโนมัติ
+"Import current Claude login" ใช้ login ที่ Claude Code มีอยู่แล้ว
+"Add Claude token manually" ใช้เก็บ setup-token หรือ OAuth token ด้วยตัวเอง
+
+การ MONITOR
+"Refresh all usage" อัปเดตข้อมูลทุกบัญชี
+Codex อ่าน account/rateLimits/read โดยไม่ยิง inference prompt
+Claude full OAuth ใช้ usage endpoint ส่วน setup-token จะยิง Haiku ที่ output
+หนึ่ง token แล้วอ่าน utilization จาก response headers
+
+ตั้งเวลา BACKGROUND
+เลือก "Configure schedule" แล้วเลือก 15m, 30m, 1h, 2h, 4h หรือ 6h
+บน macOS ระบบใช้ launchd จึงไม่ต้องเปิด Terminal ค้างไว้ แต่เครื่องต้องตื่น
+และเชื่อมต่ออินเทอร์เน็ตตอนถึงเวลาที่กำหนด
+
+ลบบัญชี
+เลือก "Remove an account" เลือกบัญชี Codex หรือ Claude แล้วกดยืนยัน
+ถ้าลบ Codex account ที่ active ระบบจะไม่ลบ ~/.codex/auth.json และไม่ logout
+แต่จะลบเฉพาะสำเนาที่ Account Center เก็บไว้
+
+คำสั่ง CLI ที่ใช้บ่อย
+aic status
+aic refresh
+aic codex use ACCOUNT
+aic codex run ACCOUNT
+aic codex remove ACCOUNT
+aic claude remove ACCOUNT
+aic schedule set 30m
+aic schedule off
+
+ตำแหน่งไฟล์
+Source code: /Users/macbookair/Desktop/Miscellaneous/ai-account-center
+ข้อมูลส่วนตัว: ~/.ai-account-center
+Credential ที่ Codex ใช้อยู่: ~/.codex/auth.json
+HELP
+}
+
+terminal_height() {
+  local height
+  height="$(tput lines 2>/dev/null || true)"
+  [[ "$height" =~ ^[0-9]+$ && "$height" -ge 12 ]] || height=24
+  printf '%s' "$height"
+}
+
+show_help_pager() {
+  local language="$1" content_file="$RUNTIME_DIR/help-$$.txt"
+  if [[ "$language" == "th" ]]; then
+    help_content_th >"$content_file"
+  else
+    help_content_en >"$content_file"
+  fi
+
+  local total height page_size offset=0 key rest max_offset
+  total="$(wc -l <"$content_file" | tr -d ' ')"
+  height="$(terminal_height)"
+  page_size=$((height - 5))
+  ((page_size < 5)) && page_size=5
+  max_offset=$((total - page_size))
+  ((max_offset < 0)) && max_offset=0
+
+  if [[ -t 0 ]]; then
+    exec 3<&0
+  elif [[ -r /dev/tty ]]; then
+    exec 3</dev/tty
+  else
+    cat "$content_file"
+    rm -f "$content_file"
+    return 0
+  fi
+
+  while true; do
+    clear 2>/dev/null || printf '\033[2J\033[H'
+    printf '%s%sHELP / คู่มือ%s  %sLine %d-%d of %d%s\n' \
+      "$BOLD" "$CYAN" "$RESET" "$DIM" "$((offset + 1))" \
+      "$((offset + page_size > total ? total : offset + page_size))" "$total" "$RESET"
+    printf '%sUp/Down scroll  PgUp/PgDn page  Home/End jump  Esc/q close%s\n\n' "$DIM" "$RESET"
+    sed -n "$((offset + 1)),$((offset + page_size))p" "$content_file"
+
+    IFS= read -r -s -n 1 key <&3 || break
+    if [[ "$key" == $'\033' ]]; then
+      rest=""
+      IFS= read -r -s -n 2 -t 1 rest <&3 || true
+      if [[ "$rest" == $'[1' || "$rest" == $'[4' || "$rest" == $'[5' || "$rest" == $'[6' ]]; then
+        local suffix=""
+        IFS= read -r -s -n 1 -t 1 suffix <&3 || true
+        rest+="$suffix"
+      fi
+      key+="$rest"
+    fi
+
+    case "$key" in
+      $'\033[A'|k|K) ((offset > 0)) && offset=$((offset - 1)) ;;
+      $'\033[B'|j|J) ((offset < max_offset)) && offset=$((offset + 1)) ;;
+      $'\033[5~') offset=$((offset - page_size)); ((offset < 0)) && offset=0 ;;
+      $'\033[6~') offset=$((offset + page_size)); ((offset > max_offset)) && offset=$max_offset ;;
+      $'\033[H'|$'\033[1~'|g) offset=0 ;;
+      $'\033[F'|$'\033[4~'|G) offset=$max_offset ;;
+      q|Q|$'\033') break ;;
+    esac
+  done
+
+  exec 3<&-
+  rm -f "$content_file"
+}
+
+interactive_help() {
+  local language
+  language="$(choose_from "Help language / ภาษาคู่มือ" "English" "ไทย")" || return 0
+  if [[ "$language" == "ไทย" ]]; then
+    show_help_pager th
+  else
+    show_help_pager en
+  fi
 }
 
 interactive_use() {
@@ -953,56 +1678,62 @@ schedule_status() {
 
 interactive_menu() {
   while true; do
+    reconcile_active_codex
     clear 2>/dev/null || true
-    printf '%s%s v%s%s\n\n' "$BOLD" "$APP_NAME" "$APP_VERSION" "$RESET"
+    print_dashboard_header
+    printf '\n'
     print_status
     printf '\n'
     local action
     action="$(
       choose_from "Action" \
-        "Switch Codex account" \
-        "Open active Codex" \
-        "Add current Codex account" \
-        "Login new Codex account" \
-        "Login Claude account" \
-        "Import current Claude login" \
-        "Add Claude token manually" \
-        "Refresh all usage" \
-        "Configure schedule" \
-        "List accounts" \
-        "Exit"
+        "$(menu_item codex-switch "Switch Codex account" codex-switch)" \
+        "$(menu_item codex-open "Open active Codex" codex-open)" \
+        "$(menu_item codex-add "Add current Codex auth.json" codex-add-current)" \
+        "$(menu_item codex-import "Import another Codex auth.json" codex-import)" \
+        "$(menu_item claude-login "Login Claude OAuth" claude-login)" \
+        "$(menu_item claude-import "Import current Claude login" claude-import)" \
+        "$(menu_item claude-token "Add Claude token manually" claude-add-token)" \
+        "$(menu_item refresh "Refresh all usage" refresh-all)" \
+        "$(menu_item schedule "Configure schedule" schedule)" \
+        "$(menu_item remove "Remove an account" remove)" \
+        "$(menu_item list "List accounts" list)" \
+        "$(menu_item help "Help / คู่มือ" help)" \
+        "$(menu_item exit "Exit" exit)"
     )" || return 0
+    action="${action##*::}"
 
     case "$action" in
-      "Switch Codex account") interactive_use ;;
-      "Open active Codex") exec codex ;;
-      "Add current Codex account")
+      codex-switch) interactive_use ;;
+      codex-open) exec codex ;;
+      codex-add-current)
         printf 'Account name: '
         IFS= read -r name
         with_lock save_live_codex_as "$name"
         ;;
-      "Login new Codex account")
+      codex-import)
         printf 'Account name: '
         IFS= read -r name
-        with_lock login_codex_impl "$name"
+        with_lock import_codex_auth_json "$name"
         ;;
-      "Login Claude account")
+      claude-login)
         printf 'Account name: '
         IFS= read -r name
         login_claude "$name"
         ;;
-      "Import current Claude login")
+      claude-import)
         printf 'Account name: '
         IFS= read -r name
         import_current_claude "$name"
         ;;
-      "Add Claude token manually")
+      claude-add-token)
         printf 'Account name: '
         IFS= read -r name
         add_claude_token "$name"
         ;;
-      "Refresh all usage") refresh_all || true ;;
-      "Configure schedule")
+      remove) interactive_remove ;;
+      refresh-all) refresh_all || true ;;
+      schedule)
         local interval
         interval="$(
           choose_from "Monitor interval" \
@@ -1014,11 +1745,12 @@ interactive_menu() {
           set_schedule_interval "$interval"
         fi
         ;;
-      "List accounts") list_accounts ;;
-      "Exit") return 0 ;;
+      list) list_accounts ;;
+      help) interactive_help ;;
+      exit) return 0 ;;
     esac
-    printf '\nPress Enter to continue...'
-    IFS= read -r _
+    printf '\n%sPress Enter to return to the dashboard...%s' "$DIM" "$RESET"
+    IFS= read -r _ </dev/tty
   done
 }
 
@@ -1033,7 +1765,7 @@ Usage:
 
 Codex accounts:
   aic codex add NAME               Save the current ~/.codex/auth.json
-  aic codex login NAME             Login and save a new account
+  aic codex import NAME [PATH]     Import auth.json from another computer
   aic codex use [NAME]             Switch account; opens selector if omitted
   aic codex run [NAME] [-- ARGS]   Switch optionally, then run Codex
   aic codex remove NAME
@@ -1060,6 +1792,7 @@ HELP
 main() {
   require_command jq
   ensure_dirs
+  reconcile_active_codex
 
   local command="${1:-tui}"
   shift || true
@@ -1083,7 +1816,7 @@ main() {
       shift || true
       case "$sub" in
         add) [[ -n "${1:-}" ]] || die "Account name required."; with_lock save_live_codex_as "$1" ;;
-        login) [[ -n "${1:-}" ]] || die "Account name required."; with_lock login_codex_impl "$1" ;;
+        import) [[ -n "${1:-}" ]] || die "Account name required."; with_lock import_codex_auth_json "$1" "${2:-}" ;;
         use)
           if [[ -n "${1:-}" ]]; then with_lock switch_codex_impl "$1"; else interactive_use; fi
           ;;
@@ -1096,7 +1829,7 @@ main() {
           exec codex "$@"
           ;;
         remove) [[ -n "${1:-}" ]] || die "Account name required."; with_lock remove_codex_impl "$1" ;;
-        *) die "Use: aic codex add|login|use|run|remove" ;;
+        *) die "Use: aic codex add|import|use|run|remove" ;;
       esac
       ;;
     claude)
