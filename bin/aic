@@ -1,0 +1,1134 @@
+#!/usr/bin/env bash
+
+set -u
+set -o pipefail
+
+export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+APP_NAME="AI Account Center"
+APP_VERSION="0.2.1"
+DATA_DIR="${AIC_DATA_DIR:-$HOME/.ai-account-center}"
+CODEX_HOME_DIR="${AIC_CODEX_HOME:-$HOME/.codex}"
+CONFIG_FILE="$DATA_DIR/config.json"
+STATE_FILE="$DATA_DIR/state.json"
+CODEX_ACCOUNTS_DIR="$DATA_DIR/accounts/codex"
+CLAUDE_ACCOUNTS_DIR="$DATA_DIR/accounts/claude"
+USAGE_DIR="$DATA_DIR/usage"
+BACKUP_DIR="$DATA_DIR/backups"
+RUNTIME_DIR="$DATA_DIR/runtime"
+LOCK_DIR="$DATA_DIR/lock"
+
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
+  RED=$'\033[31m'
+  GREEN=$'\033[32m'
+  YELLOW=$'\033[33m'
+  CYAN=$'\033[36m'
+  RESET=$'\033[0m'
+else
+  BOLD=""
+  DIM=""
+  RED=""
+  GREEN=""
+  YELLOW=""
+  CYAN=""
+  RESET=""
+fi
+
+die() {
+  printf '%sError:%s %s\n' "$RED" "$RESET" "$*" >&2
+  exit 1
+}
+
+warn() {
+  printf '%sWarning:%s %s\n' "$YELLOW" "$RESET" "$*" >&2
+}
+
+info() {
+  printf '%s%s%s\n' "$CYAN" "$*" "$RESET"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+ensure_dirs() {
+  mkdir -p \
+    "$CODEX_ACCOUNTS_DIR" \
+    "$CLAUDE_ACCOUNTS_DIR" \
+    "$USAGE_DIR" \
+    "$BACKUP_DIR" \
+    "$RUNTIME_DIR"
+  chmod 700 "$DATA_DIR" "$DATA_DIR/accounts" "$CODEX_ACCOUNTS_DIR" \
+    "$CLAUDE_ACCOUNTS_DIR" "$USAGE_DIR" "$BACKUP_DIR" "$RUNTIME_DIR" 2>/dev/null || true
+
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    cat >"$CONFIG_FILE.tmp" <<'JSON'
+{
+  "schedule": {
+    "enabled": false,
+    "interval_minutes": 60
+  },
+  "monitor": {
+    "codex": {
+      "enabled": true,
+      "prompt": "Reply only with: 1",
+      "timeout_seconds": 120
+    },
+    "claude": {
+      "enabled": true,
+      "timeout_seconds": 15,
+      "probe_model": "claude-haiku-4-5-20251001"
+    }
+  }
+}
+JSON
+    chmod 600 "$CONFIG_FILE.tmp"
+    mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  fi
+
+  if [[ ! -f "$STATE_FILE" ]]; then
+    printf '{"active_codex_account":null}\n' >"$STATE_FILE.tmp"
+    chmod 600 "$STATE_FILE.tmp"
+    mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
+}
+
+validate_name() {
+  local name="${1:-}"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] ||
+    die "Account name must use letters, numbers, dot, underscore, or dash."
+}
+
+codex_account_file() {
+  printf '%s/%s.json\n' "$CODEX_ACCOUNTS_DIR" "$1"
+}
+
+claude_account_file() {
+  printf '%s/%s.json\n' "$CLAUDE_ACCOUNTS_DIR" "$1"
+}
+
+usage_file() {
+  printf '%s/%s-%s.json\n' "$USAGE_DIR" "$1" "$2"
+}
+
+active_codex_name() {
+  jq -r '.active_codex_account // empty' "$STATE_FILE" 2>/dev/null
+}
+
+set_active_codex_name() {
+  local name="$1"
+  jq --arg name "$name" '.active_codex_account = $name' "$STATE_FILE" >"$STATE_FILE.tmp" ||
+    die "Could not update state."
+  chmod 600 "$STATE_FILE.tmp"
+  mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+clear_active_codex_name() {
+  jq '.active_codex_account = null' "$STATE_FILE" >"$STATE_FILE.tmp" ||
+    die "Could not update state."
+  chmod 600 "$STATE_FILE.tmp"
+  mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+with_lock() {
+  local command_name="$1"
+  shift
+
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    die "Another account operation is running. Remove $LOCK_DIR only if no aic process exists."
+  fi
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+  "$command_name" "$@"
+  local status=$?
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  trap - EXIT INT TERM
+  return "$status"
+}
+
+backup_live_auth() {
+  local auth="$CODEX_HOME_DIR/auth.json"
+  [[ -f "$auth" ]] || return 0
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  cp "$auth" "$BACKUP_DIR/codex-auth-$stamp.json"
+  chmod 600 "$BACKUP_DIR/codex-auth-$stamp.json"
+}
+
+validate_codex_auth() {
+  local file="$1"
+  jq -e '
+    .auth_mode and
+    (.tokens | type == "object") and
+    (.tokens.account_id | type == "string" and length > 0) and
+    (.tokens.access_token | type == "string" and length > 0)
+  ' "$file" >/dev/null 2>&1
+}
+
+codex_account_id() {
+  jq -r '.tokens.account_id // empty' "$1"
+}
+
+codex_email() {
+  local file="$1"
+  local payload
+  payload="$(
+    jq -r '.tokens.id_token // empty' "$file" |
+      awk -F. 'NF >= 2 { print $2 }' |
+      tr '_-' '/+' |
+      awk '{
+        rem = length($0) % 4
+        if (rem == 2) print $0 "=="
+        else if (rem == 3) print $0 "="
+        else print $0
+      }'
+  )"
+  [[ -n "$payload" ]] || return 0
+
+  local decoded=""
+  decoded="$(printf '%s' "$payload" | base64 --decode 2>/dev/null)" ||
+    decoded="$(printf '%s' "$payload" | base64 -D 2>/dev/null)" ||
+    return 0
+  jq -r '.email // .["https://api.openai.com/profile"].email // empty' <<<"$decoded" 2>/dev/null
+}
+
+save_live_codex_as() {
+  local name="$1"
+  validate_name "$name"
+  local auth="$CODEX_HOME_DIR/auth.json"
+  [[ -f "$auth" ]] || die "No Codex auth file found at $auth. Run codex login first."
+  validate_codex_auth "$auth" || die "The current Codex auth file has an unsupported format."
+
+  local destination
+  destination="$(codex_account_file "$name")"
+  local current_id duplicate
+  current_id="$(codex_account_id "$auth")"
+  duplicate="$(
+    for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+      [[ -e "$file" ]] || continue
+      if [[ "$(codex_account_id "$file")" == "$current_id" && "$file" != "$destination" ]]; then
+        basename "$file" .json
+        break
+      fi
+    done
+  )"
+  [[ -z "$duplicate" ]] || die "This Codex account is already stored as '$duplicate'."
+
+  cp "$auth" "$destination.tmp"
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+  set_active_codex_name "$name"
+
+  local email
+  email="$(codex_email "$destination")"
+  printf 'Saved Codex account: %s%s\n' "$name" "${email:+ ($email)}"
+}
+
+sync_active_codex() {
+  local active auth destination
+  active="$(active_codex_name)"
+  auth="$CODEX_HOME_DIR/auth.json"
+  [[ -n "$active" && -f "$auth" ]] || return 0
+  validate_codex_auth "$auth" || return 0
+
+  destination="$(codex_account_file "$active")"
+  [[ -f "$destination" ]] || return 0
+
+  if [[ "$(codex_account_id "$auth")" == "$(codex_account_id "$destination")" ]]; then
+    cp "$auth" "$destination.tmp"
+    chmod 600 "$destination.tmp"
+    mv -f "$destination.tmp" "$destination"
+  fi
+}
+
+switch_codex_impl() {
+  local name="$1"
+  validate_name "$name"
+  local source auth
+  source="$(codex_account_file "$name")"
+  auth="$CODEX_HOME_DIR/auth.json"
+  [[ -f "$source" ]] || die "Unknown Codex account: $name"
+  validate_codex_auth "$source" || die "Stored auth for '$name' is invalid."
+
+  sync_active_codex
+  backup_live_auth
+  mkdir -p "$CODEX_HOME_DIR"
+  cp "$source" "$auth.tmp"
+  chmod 600 "$auth.tmp"
+  mv -f "$auth.tmp" "$auth"
+  set_active_codex_name "$name"
+
+  printf 'Active Codex account: %s\n' "$name"
+}
+
+login_codex_impl() {
+  local name="$1"
+  validate_name "$name"
+  require_command codex
+
+  sync_active_codex
+  backup_live_auth
+  local previous=""
+  if [[ -f "$CODEX_HOME_DIR/auth.json" ]]; then
+    previous="$RUNTIME_DIR/auth-before-login-$$.json"
+    cp "$CODEX_HOME_DIR/auth.json" "$previous"
+    chmod 600 "$previous"
+  fi
+
+  printf 'Starting Codex device login for account: %s\n' "$name"
+  if ! CODEX_HOME="$CODEX_HOME_DIR" codex logout >/dev/null 2>&1; then
+    warn "Codex logout returned an error; continuing with login."
+  fi
+  if ! CODEX_HOME="$CODEX_HOME_DIR" codex login --device-auth; then
+    if [[ -n "$previous" && -f "$previous" ]]; then
+      cp "$previous" "$CODEX_HOME_DIR/auth.json.tmp"
+      chmod 600 "$CODEX_HOME_DIR/auth.json.tmp"
+      mv -f "$CODEX_HOME_DIR/auth.json.tmp" "$CODEX_HOME_DIR/auth.json"
+    fi
+    rm -f "$previous"
+    die "Codex login failed. Previous auth was restored when available."
+  fi
+  rm -f "$previous"
+  save_live_codex_as "$name"
+}
+
+remove_codex_impl() {
+  local name="$1"
+  validate_name "$name"
+  local file active
+  file="$(codex_account_file "$name")"
+  [[ -f "$file" ]] || die "Unknown Codex account: $name"
+  active="$(active_codex_name)"
+  if [[ "$active" == "$name" ]]; then
+    die "Cannot remove the active account. Switch to another account first."
+  fi
+  rm -f "$file" "$(usage_file codex "$name")"
+  printf 'Removed Codex account: %s\n' "$name"
+}
+
+add_claude_token() {
+  local name="$1"
+  local token="${2:-}"
+  validate_name "$name"
+
+  if [[ -z "$token" ]]; then
+    if [[ ! -t 0 ]]; then
+      IFS= read -r token
+    else
+      printf 'Claude subscription token: ' >&2
+      IFS= read -r -s token
+      printf '\n' >&2
+    fi
+  fi
+  [[ -n "$token" ]] || die "Claude token cannot be empty."
+
+  local destination
+  destination="$(claude_account_file "$name")"
+  jq -n --arg token "$token" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{token:$token, created_at:$created}' >"$destination.tmp" ||
+    die "Could not store Claude token."
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+  printf 'Saved Claude account: %s\n' "$name"
+}
+
+current_claude_oauth_token() {
+  local blob token=""
+
+  if command -v security >/dev/null 2>&1; then
+    blob="$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)"
+    if [[ -n "$blob" ]]; then
+      token="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$blob" 2>/dev/null)"
+    fi
+  fi
+
+  if [[ -z "$token" && -f "$HOME/.claude/.credentials.json" ]]; then
+    token="$(jq -r '.claudeAiOauth.accessToken // empty' "$HOME/.claude/.credentials.json" 2>/dev/null)"
+  fi
+
+  printf '%s' "$token"
+}
+
+import_current_claude() {
+  local name="$1" token
+  validate_name "$name"
+  token="$(current_claude_oauth_token)"
+  [[ -n "$token" ]] ||
+    die "No full Claude OAuth login found. Run: aic claude login $name"
+  add_claude_token "$name" "$token"
+}
+
+login_claude() {
+  local name="$1"
+  validate_name "$name"
+  require_command claude
+  printf 'Starting Claude subscription login for account: %s\n' "$name"
+  claude auth login --claudeai || die "Claude login failed."
+  import_current_claude "$name"
+}
+
+remove_claude() {
+  local name="$1"
+  validate_name "$name"
+  local file
+  file="$(claude_account_file "$name")"
+  [[ -f "$file" ]] || die "Unknown Claude account: $name"
+  rm -f "$file" "$(usage_file claude "$name")"
+  printf 'Removed Claude account: %s\n' "$name"
+}
+
+iso_from_epoch() {
+  local epoch="$1"
+  if date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then
+    date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ
+  else
+    date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ
+  fi
+}
+
+write_error_usage() {
+  local provider="$1" name="$2" message="$3"
+  local destination
+  destination="$(usage_file "$provider" "$name")"
+  jq -n \
+    --arg provider "$provider" \
+    --arg account "$name" \
+    --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg error "$message" \
+    '{provider:$provider, account:$account, checked_at:$checked, status:"error", error:$error}' \
+    >"$destination.tmp"
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+}
+
+refresh_codex_account() {
+  local name="$1"
+  local source
+  source="$(codex_account_file "$name")"
+  [[ -f "$source" ]] || return 1
+
+  local enabled
+  enabled="$(jq -r '.monitor.codex.enabled // true' "$CONFIG_FILE")"
+  [[ "$enabled" == "true" ]] || return 0
+  require_command codex
+
+  local runtime output timeout_seconds helper
+  runtime="$RUNTIME_DIR/codex-$name"
+  output="$RUNTIME_DIR/codex-$name-rate-limits.json"
+  timeout_seconds="$(jq -r '.monitor.codex.timeout_seconds // 120' "$CONFIG_FILE")"
+  helper="$(cd "$(dirname "$(resolve_self)")/.." && pwd)/lib/codex-rate-limits.mjs"
+  [[ -f "$helper" ]] || die "Missing Codex rate-limit helper: $helper"
+  require_command node
+
+  rm -rf "$runtime"
+  mkdir -p "$runtime"
+  chmod 700 "$runtime"
+  cp "$source" "$runtime/auth.json"
+  chmod 600 "$runtime/auth.json"
+
+  local status=0
+  CODEX_HOME="$runtime" node "$helper" "$timeout_seconds" \
+    >"$output" 2>"$output.stderr" || status=$?
+
+  if [[ -f "$runtime/auth.json" ]] && validate_codex_auth "$runtime/auth.json"; then
+    cp "$runtime/auth.json" "$source.tmp"
+    chmod 600 "$source.tmp"
+    mv -f "$source.tmp" "$source"
+
+    if [[ "$(active_codex_name)" == "$name" ]]; then
+      cp "$source" "$CODEX_HOME_DIR/auth.json.tmp"
+      chmod 600 "$CODEX_HOME_DIR/auth.json.tmp"
+      mv -f "$CODEX_HOME_DIR/auth.json.tmp" "$CODEX_HOME_DIR/auth.json"
+    fi
+  fi
+
+  local limits
+  limits="$(jq -c '.rateLimitsByLimitId.codex // .rateLimits // empty' "$output" 2>/dev/null)"
+  if [[ -z "$limits" || "$limits" == "null" ]]; then
+    local error_message
+    error_message="$(tail -1 "$output.stderr" 2>/dev/null)"
+    [[ -n "$error_message" ]] ||
+      error_message="$(jq -r '.error.message // empty' "$output" 2>/dev/null)"
+    [[ -n "$error_message" ]] ||
+      error_message="Codex app-server returned no rate-limit metadata (exit $status)."
+    write_error_usage codex "$name" "$error_message"
+    return 1
+  fi
+
+  local destination
+  destination="$(usage_file codex "$name")"
+  jq -n \
+    --arg account "$name" \
+    --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson limits "$limits" \
+    '{
+      provider:"codex",
+      account:$account,
+      checked_at:$checked,
+      status:"ok",
+      plan_type:($limits.planType // null),
+      limits:{
+        five_hour:{
+          used_percent:($limits.primary.usedPercent // null),
+          remaining_percent:(100 - ($limits.primary.usedPercent // 0)),
+          resets_at_epoch:($limits.primary.resetsAt // null)
+        },
+        weekly:{
+          used_percent:($limits.secondary.usedPercent // null),
+          remaining_percent:(100 - ($limits.secondary.usedPercent // 0)),
+          resets_at_epoch:($limits.secondary.resetsAt // null)
+        }
+      }
+    }' >"$destination.tmp"
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+  return 0
+}
+
+refresh_claude_account() {
+  local name="$1"
+  local source token timeout_seconds enabled
+  source="$(claude_account_file "$name")"
+  [[ -f "$source" ]] || return 1
+  enabled="$(jq -r '.monitor.claude.enabled // true' "$CONFIG_FILE")"
+  [[ "$enabled" == "true" ]] || return 0
+  require_command curl
+
+  token="$(jq -r '.token // empty' "$source")"
+  [[ -n "$token" ]] || {
+    write_error_usage claude "$name" "Stored Claude token is empty."
+    return 1
+  }
+  timeout_seconds="$(jq -r '.monitor.claude.timeout_seconds // 15' "$CONFIG_FILE")"
+
+  local response
+  response="$(
+    curl -sS --max-time "$timeout_seconds" \
+      -H "Accept: application/json" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $token" \
+      -H "anthropic-beta: oauth-2025-04-20" \
+      -H "User-Agent: ai-account-center/$APP_VERSION" \
+      "https://api.anthropic.com/api/oauth/usage" 2>/dev/null
+  )"
+
+  local usage="$response" source_type="usage_endpoint"
+  if ! jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
+    local message
+    message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
+    if [[ "$message" == *"scope requirement user:profile"* ]]; then
+      local headers body model payload http_code
+      headers="$RUNTIME_DIR/claude-$name-headers.txt"
+      body="$RUNTIME_DIR/claude-$name-body.json"
+      model="$(jq -r '.monitor.claude.probe_model // "claude-haiku-4-5-20251001"' "$CONFIG_FILE")"
+      payload="$(
+        jq -nc --arg model "$model" '{
+          model:$model,
+          max_tokens:1,
+          messages:[{role:"user",content:"hi"}]
+        }'
+      )"
+
+      http_code="$(
+        curl -sS --max-time "$timeout_seconds" \
+          -D "$headers" \
+          -o "$body" \
+          -w '%{http_code}' \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $token" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "anthropic-beta: oauth-2025-04-20" \
+          -H "User-Agent: ai-account-center/$APP_VERSION" \
+          -X POST \
+          -d "$payload" \
+          "https://api.anthropic.com/v1/messages" 2>/dev/null
+      )"
+
+      local five_util week_util five_reset week_reset
+      five_util="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-5h-utilization" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
+      week_util="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-7d-utilization" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
+      five_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-5h-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
+      week_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-7d-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
+
+      if [[ "$http_code" =~ ^2 && -n "$five_util" && -n "$week_util" ]]; then
+        usage="$(
+          jq -n \
+            --arg five "$five_util" \
+            --arg week "$week_util" \
+            --argjson five_reset "${five_reset:-null}" \
+            --argjson week_reset "${week_reset:-null}" \
+            '{
+              five_hour:{
+                utilization:(($five | tonumber) * 100),
+                resets_at_epoch:$five_reset
+              },
+              seven_day:{
+                utilization:(($week | tonumber) * 100),
+                resets_at_epoch:$week_reset
+              }
+            }'
+        )"
+        source_type="inference_headers"
+      else
+        message="$(jq -r '.error.message // .message // empty' "$body" 2>/dev/null)"
+        [[ -n "$message" ]] ||
+          message="Claude probe failed (HTTP ${http_code:-unknown}); rate-limit headers were missing."
+        write_error_usage claude "$name" "$message"
+        return 1
+      fi
+    else
+      write_error_usage claude "$name" "$message"
+      return 1
+    fi
+  fi
+
+  local destination
+  destination="$(usage_file claude "$name")"
+  jq -n \
+    --arg account "$name" \
+    --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg source "$source_type" \
+    --argjson usage "$usage" \
+    '{
+      provider:"claude",
+      account:$account,
+      checked_at:$checked,
+      status:"ok",
+      source:$source,
+      limits:{
+        five_hour:{
+          used_percent:($usage.five_hour.utilization // null),
+          remaining_percent:(100 - ($usage.five_hour.utilization // 0)),
+          resets_at:($usage.five_hour.resets_at // null),
+          resets_at_epoch:($usage.five_hour.resets_at_epoch // null)
+        },
+        weekly:{
+          used_percent:($usage.seven_day.utilization // null),
+          remaining_percent:(100 - ($usage.seven_day.utilization // 0)),
+          resets_at:($usage.seven_day.resets_at // null),
+          resets_at_epoch:($usage.seven_day.resets_at_epoch // null)
+        }
+      }
+    }' >"$destination.tmp"
+  chmod 600 "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+  return 0
+}
+
+refresh_all() {
+  local failures=0 found=0 name
+  for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    found=1
+    name="$(basename "$file" .json)"
+    printf 'Refreshing Codex/%s... ' "$name"
+    if refresh_codex_account "$name"; then
+      printf 'ok\n'
+    else
+      printf 'failed\n'
+      failures=$((failures + 1))
+    fi
+  done
+
+  for file in "$CLAUDE_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    found=1
+    name="$(basename "$file" .json)"
+    printf 'Refreshing Claude/%s... ' "$name"
+    if refresh_claude_account "$name"; then
+      printf 'ok\n'
+    else
+      printf 'failed\n'
+      failures=$((failures + 1))
+    fi
+  done
+
+  [[ "$found" -eq 1 ]] || warn "No accounts have been added."
+  [[ "$failures" -eq 0 ]]
+}
+
+format_reset() {
+  local file="$1" window="$2"
+  local value epoch
+  value="$(jq -r --arg window "$window" '.limits[$window].resets_at // empty' "$file" 2>/dev/null)"
+  epoch="$(jq -r --arg window "$window" '.limits[$window].resets_at_epoch // empty' "$file" 2>/dev/null)"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value" | sed -E 's/T/ /; s/(\.[0-9]+)?([+-][0-9:]+|Z)$//'
+  elif [[ -n "$epoch" ]]; then
+    iso_from_epoch "$epoch" | sed -E 's/T/ /; s/Z$//'
+  else
+    printf '-'
+  fi
+}
+
+print_status() {
+  local active
+  active="$(active_codex_name)"
+  local errors=()
+  printf '%s%-8s %-18s %-8s %-9s %-17s %-17s%s\n' \
+    "$BOLD" "TYPE" "ACCOUNT" "5H LEFT" "WEEK LEFT" "5H RESET (UTC)" "WEEK RESET (UTC)" "$RESET"
+
+  local provider dir file name usage marker status five week reset5 resetw
+  for provider in codex claude; do
+    if [[ "$provider" == "codex" ]]; then
+      dir="$CODEX_ACCOUNTS_DIR"
+    else
+      dir="$CLAUDE_ACCOUNTS_DIR"
+    fi
+
+    for file in "$dir"/*.json; do
+      [[ -e "$file" ]] || continue
+      name="$(basename "$file" .json)"
+      usage="$(usage_file "$provider" "$name")"
+      marker=" "
+      [[ "$provider" == "codex" && "$active" == "$name" ]] && marker="*"
+
+      if [[ ! -f "$usage" ]]; then
+        printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
+          "$provider" "$marker" "$name" "-" "-" "not checked" "-"
+        continue
+      fi
+
+      status="$(jq -r '.status // "error"' "$usage")"
+      if [[ "$status" != "ok" ]]; then
+        local full_error
+        full_error="$(jq -r '.error // "unknown"' "$usage")"
+        errors+=("$provider/$name: $full_error")
+        printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
+          "$provider" "$marker" "$name" "error" "error" "see below" "-"
+        continue
+      fi
+
+      five="$(jq -r '.limits.five_hour.remaining_percent // "-"' "$usage")"
+      week="$(jq -r '.limits.weekly.remaining_percent // "-"' "$usage")"
+      reset5="$(format_reset "$usage" five_hour)"
+      resetw="$(format_reset "$usage" weekly)"
+      [[ "$five" == "-" ]] || five="${five}%"
+      [[ "$week" == "-" ]] || week="${week}%"
+      printf '%-8s %s%-17s %-8s %-9s %-17s %-17s\n' \
+        "$provider" "$marker" "$name" "$five" "$week" "$reset5" "$resetw"
+    done
+  done
+
+  if [[ "${#errors[@]}" -gt 0 ]]; then
+    printf '\n%sErrors%s\n' "$BOLD" "$RESET"
+    local error
+    for error in "${errors[@]}"; do
+      printf '  - %s\n' "$error"
+    done
+  fi
+}
+
+list_accounts() {
+  local active name file
+  active="$(active_codex_name)"
+  printf '%sCodex%s\n' "$BOLD" "$RESET"
+  for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    name="$(basename "$file" .json)"
+    if [[ "$name" == "$active" ]]; then
+      printf '  * %s\n' "$name"
+    else
+      printf '    %s\n' "$name"
+    fi
+  done
+  printf '%sClaude%s\n' "$BOLD" "$RESET"
+  for file in "$CLAUDE_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    printf '    %s\n' "$(basename "$file" .json)"
+  done
+}
+
+choose_from() {
+  local prompt="$1"
+  shift
+  local options=("$@")
+  [[ "${#options[@]}" -gt 0 ]] || return 1
+
+  if command -v fzf >/dev/null 2>&1; then
+    printf '%s\n' "${options[@]}" | fzf --prompt="$prompt > "
+    return
+  fi
+
+  printf '%s\n' "$prompt" >&2
+  local i
+  for ((i = 0; i < ${#options[@]}; i++)); do
+    printf '  %d. %s\n' "$((i + 1))" "${options[$i]}" >&2
+  done
+  printf 'Select: ' >&2
+  local selection
+  IFS= read -r selection
+  [[ "$selection" =~ ^[0-9]+$ ]] || return 1
+  ((selection >= 1 && selection <= ${#options[@]})) || return 1
+  printf '%s\n' "${options[$((selection - 1))]}"
+}
+
+codex_names() {
+  local file
+  for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    basename "$file" .json
+  done
+}
+
+interactive_use() {
+  local options=() name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && options+=("$name")
+  done < <(codex_names)
+  name="$(choose_from "Select Codex account" "${options[@]}")" || return 1
+  with_lock switch_codex_impl "$name"
+}
+
+set_schedule_interval() {
+  local raw="$1" minutes
+  case "$raw" in
+    *m)
+      minutes="${raw%m}"
+      [[ "$minutes" =~ ^[0-9]+$ ]] ||
+        die "Use an interval such as 15m, 30m, 1h, or 2h."
+      ;;
+    *h)
+      local hours="${raw%h}"
+      [[ "$hours" =~ ^[0-9]+$ ]] ||
+        die "Use an interval such as 15m, 30m, 1h, or 2h."
+      minutes=$((hours * 60))
+      ;;
+    *)
+      minutes="$raw"
+      ;;
+  esac
+  [[ "$minutes" =~ ^[0-9]+$ ]] || die "Use an interval such as 15m, 30m, 1h, or 2h."
+  ((minutes >= 5 && minutes <= 10080)) || die "Interval must be between 5 minutes and 7 days."
+
+  jq --argjson minutes "$minutes" \
+    '.schedule.enabled = true | .schedule.interval_minutes = $minutes' \
+    "$CONFIG_FILE" >"$CONFIG_FILE.tmp" || die "Could not update config."
+  chmod 600 "$CONFIG_FILE.tmp"
+  mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  printf 'Monitor interval: %s minutes\n' "$minutes"
+  install_scheduler
+}
+
+disable_schedule() {
+  jq '.schedule.enabled = false' "$CONFIG_FILE" >"$CONFIG_FILE.tmp" ||
+    die "Could not update config."
+  chmod 600 "$CONFIG_FILE.tmp"
+  mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  uninstall_scheduler
+  printf 'Background monitor disabled.\n'
+}
+
+resolve_self() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "$source" ]]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  cd -P "$(dirname "$source")" && printf '%s/%s\n' "$PWD" "$(basename "$source")"
+}
+
+install_launchd() {
+  local interval_seconds plist script_path log_dir
+  interval_seconds=$(( $(jq -r '.schedule.interval_minutes' "$CONFIG_FILE") * 60 ))
+  plist="$HOME/Library/LaunchAgents/com.local.ai-account-center.plist"
+  script_path="$(resolve_self)"
+  log_dir="$DATA_DIR/logs"
+  mkdir -p "$HOME/Library/LaunchAgents" "$log_dir"
+
+  cat >"$plist.tmp" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.ai-account-center</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$script_path</string>
+    <string>refresh</string>
+    <string>--scheduled</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>$interval_seconds</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$log_dir/scheduler.log</string>
+  <key>StandardErrorPath</key>
+  <string>$log_dir/scheduler-error.log</string>
+</dict>
+</plist>
+PLIST
+  mv -f "$plist.tmp" "$plist"
+  launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 ||
+    warn "launchd could not load the scheduler. Try: launchctl bootstrap gui/$(id -u) '$plist'"
+  printf 'Installed launchd scheduler: %s\n' "$plist"
+}
+
+uninstall_launchd() {
+  local plist="$HOME/Library/LaunchAgents/com.local.ai-account-center.plist"
+  if [[ -f "$plist" ]]; then
+    launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+    rm -f "$plist"
+  fi
+}
+
+install_systemd() {
+  local minutes script_path unit_dir
+  minutes="$(jq -r '.schedule.interval_minutes' "$CONFIG_FILE")"
+  script_path="$(resolve_self)"
+  unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  mkdir -p "$unit_dir"
+
+  cat >"$unit_dir/ai-account-center.service" <<UNIT
+[Unit]
+Description=Refresh AI account usage
+
+[Service]
+Type=oneshot
+ExecStart=$script_path refresh --scheduled
+UNIT
+
+  cat >"$unit_dir/ai-account-center.timer" <<UNIT
+[Unit]
+Description=Refresh AI account usage every $minutes minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${minutes}min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now ai-account-center.timer
+  printf 'Installed systemd user timer.\n'
+}
+
+uninstall_systemd() {
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  systemctl --user disable --now ai-account-center.timer >/dev/null 2>&1 || true
+  rm -f "$unit_dir/ai-account-center.service" "$unit_dir/ai-account-center.timer"
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+}
+
+install_scheduler() {
+  case "$(uname -s)" in
+    Darwin) install_launchd ;;
+    Linux)
+      command -v systemctl >/dev/null 2>&1 ||
+        die "systemd is not available. Use cron to run: $(resolve_self) refresh --scheduled"
+      install_systemd
+      ;;
+    *) die "Automatic scheduler installation supports macOS and systemd Linux." ;;
+  esac
+}
+
+uninstall_scheduler() {
+  case "$(uname -s)" in
+    Darwin) uninstall_launchd ;;
+    Linux) uninstall_systemd ;;
+  esac
+}
+
+schedule_status() {
+  jq '.schedule' "$CONFIG_FILE"
+  case "$(uname -s)" in
+    Darwin)
+      launchctl print "gui/$(id -u)/com.local.ai-account-center" >/dev/null 2>&1 &&
+        printf 'scheduler: loaded\n' || printf 'scheduler: not loaded\n'
+      ;;
+    Linux)
+      systemctl --user is-active ai-account-center.timer 2>/dev/null || true
+      ;;
+  esac
+}
+
+interactive_menu() {
+  while true; do
+    clear 2>/dev/null || true
+    printf '%s%s v%s%s\n\n' "$BOLD" "$APP_NAME" "$APP_VERSION" "$RESET"
+    print_status
+    printf '\n'
+    local action
+    action="$(
+      choose_from "Action" \
+        "Switch Codex account" \
+        "Open active Codex" \
+        "Add current Codex account" \
+        "Login new Codex account" \
+        "Login Claude account" \
+        "Import current Claude login" \
+        "Add Claude token manually" \
+        "Refresh all usage" \
+        "Configure schedule" \
+        "List accounts" \
+        "Exit"
+    )" || return 0
+
+    case "$action" in
+      "Switch Codex account") interactive_use ;;
+      "Open active Codex") exec codex ;;
+      "Add current Codex account")
+        printf 'Account name: '
+        IFS= read -r name
+        with_lock save_live_codex_as "$name"
+        ;;
+      "Login new Codex account")
+        printf 'Account name: '
+        IFS= read -r name
+        with_lock login_codex_impl "$name"
+        ;;
+      "Login Claude account")
+        printf 'Account name: '
+        IFS= read -r name
+        login_claude "$name"
+        ;;
+      "Import current Claude login")
+        printf 'Account name: '
+        IFS= read -r name
+        import_current_claude "$name"
+        ;;
+      "Add Claude token manually")
+        printf 'Account name: '
+        IFS= read -r name
+        add_claude_token "$name"
+        ;;
+      "Refresh all usage") refresh_all || true ;;
+      "Configure schedule")
+        local interval
+        interval="$(
+          choose_from "Monitor interval" \
+            "15m" "30m" "1h" "2h" "4h" "6h" "off"
+        )" || true
+        if [[ "$interval" == "off" ]]; then
+          disable_schedule
+        elif [[ -n "$interval" ]]; then
+          set_schedule_interval "$interval"
+        fi
+        ;;
+      "List accounts") list_accounts ;;
+      "Exit") return 0 ;;
+    esac
+    printf '\nPress Enter to continue...'
+    IFS= read -r _
+  done
+}
+
+print_help() {
+  cat <<HELP
+$APP_NAME v$APP_VERSION
+
+Usage:
+  aic                              Open the interactive TUI
+  aic status                       Show cached limits for all accounts
+  aic refresh [provider] [name]    Refresh usage
+
+Codex accounts:
+  aic codex add NAME               Save the current ~/.codex/auth.json
+  aic codex login NAME             Login and save a new account
+  aic codex use [NAME]             Switch account; opens selector if omitted
+  aic codex run [NAME] [-- ARGS]   Switch optionally, then run Codex
+  aic codex remove NAME
+
+Claude accounts:
+  aic claude login NAME            Login with Claude subscription OAuth
+  aic claude import NAME           Import the current full Claude login
+  aic claude add NAME [TOKEN]      TOKEN may also be piped on stdin
+  aic claude remove NAME
+  aic claude setup-token           Inference-only; cannot read usage endpoint
+
+Schedule:
+  aic schedule set 15m|30m|1h|2h
+  aic schedule off
+  aic schedule status
+
+Other:
+  aic list
+  aic config
+  aic version
+HELP
+}
+
+main() {
+  require_command jq
+  ensure_dirs
+
+  local command="${1:-tui}"
+  shift || true
+  case "$command" in
+    tui) interactive_menu ;;
+    status) print_status ;;
+    list) list_accounts ;;
+    refresh)
+      if [[ "${1:-}" == "--scheduled" || -z "${1:-}" ]]; then
+        refresh_all
+      elif [[ "${1:-}" == "codex" && -n "${2:-}" ]]; then
+        refresh_codex_account "$2"
+      elif [[ "${1:-}" == "claude" && -n "${2:-}" ]]; then
+        refresh_claude_account "$2"
+      else
+        die "Use: aic refresh [codex|claude] [account]"
+      fi
+      ;;
+    codex)
+      local sub="${1:-}"
+      shift || true
+      case "$sub" in
+        add) [[ -n "${1:-}" ]] || die "Account name required."; with_lock save_live_codex_as "$1" ;;
+        login) [[ -n "${1:-}" ]] || die "Account name required."; with_lock login_codex_impl "$1" ;;
+        use)
+          if [[ -n "${1:-}" ]]; then with_lock switch_codex_impl "$1"; else interactive_use; fi
+          ;;
+        run)
+          if [[ -n "${1:-}" && "${1:-}" != "--" ]]; then
+            with_lock switch_codex_impl "$1"
+            shift
+          fi
+          [[ "${1:-}" == "--" ]] && shift
+          exec codex "$@"
+          ;;
+        remove) [[ -n "${1:-}" ]] || die "Account name required."; with_lock remove_codex_impl "$1" ;;
+        *) die "Use: aic codex add|login|use|run|remove" ;;
+      esac
+      ;;
+    claude)
+      local sub="${1:-}"
+      shift || true
+      case "$sub" in
+        login) [[ -n "${1:-}" ]] || die "Account name required."; login_claude "$1" ;;
+        import) [[ -n "${1:-}" ]] || die "Account name required."; import_current_claude "$1" ;;
+        add) [[ -n "${1:-}" ]] || die "Account name required."; add_claude_token "$1" "${2:-}" ;;
+        remove) [[ -n "${1:-}" ]] || die "Account name required."; remove_claude "$1" ;;
+        setup-token) exec claude setup-token ;;
+        *) die "Use: aic claude login|import|add|remove|setup-token" ;;
+      esac
+      ;;
+    schedule)
+      local sub="${1:-status}"
+      shift || true
+      case "$sub" in
+        set) [[ -n "${1:-}" ]] || die "Interval required."; set_schedule_interval "$1" ;;
+        off) disable_schedule ;;
+        status) schedule_status ;;
+        *) die "Use: aic schedule set INTERVAL|off|status" ;;
+      esac
+      ;;
+    config)
+      printf '%s\n' "$CONFIG_FILE"
+      jq . "$CONFIG_FILE"
+      ;;
+    version|--version|-V) printf '%s\n' "$APP_VERSION" ;;
+    help|--help|-h) print_help ;;
+    *) print_help; exit 1 ;;
+  esac
+}
+
+main "$@"
