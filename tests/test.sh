@@ -172,6 +172,17 @@ chmod +x "$TMP/bin/codex"
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "88"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "66"
 
+jq '.account = "company" |
+    .limits.five_hour.used_percent = 2 |
+    .limits.weekly.used_percent = 4 |
+    .limits.five_hour.resets_at_epoch = 1781506075 |
+    .limits.weekly.resets_at_epoch = 1781603429' \
+  "$AIC_DATA_DIR/usage/codex-personal.json" >"$AIC_DATA_DIR/usage/codex-company.json"
+output="$("$ROOT/bin/aic" recommend)"
+assert_contains "$output" "Best now: company"
+assert_contains "$output" "★ best"
+assert_contains "$output" "5h usage is low"
+
 "$ROOT/bin/aic" codex use company >/dev/null
 "$ROOT/bin/aic" refresh codex personal
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
@@ -231,6 +242,9 @@ assert_contains "$output" "12% → Jun 20, 15:00"
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
+
+output="$(printf 'q' | "$ROOT/bin/aic")"
+assert_contains "$output" "Background refresh:"
 
 "$ROOT/bin/aic" codex remove company >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/codex/company.json"
