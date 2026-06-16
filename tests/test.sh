@@ -12,6 +12,16 @@ export AIC_CODEX_HOME="$TMP/codex"
 mkdir -p "$HOME" "$AIC_CODEX_HOME" "$TMP/bin"
 export PATH="$TMP/bin:$PATH"
 
+mock_no_codex_processes() {
+  cat >"$TMP/bin/pgrep" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$TMP/bin/pgrep"
+}
+
+mock_no_codex_processes
+
 cat >"$AIC_CODEX_HOME/auth.json" <<'JSON'
 {
   "auth_mode": "chatgpt",
@@ -82,6 +92,57 @@ test ! -f "$AIC_DATA_DIR/accounts/codex/incomplete.json"
 
 "$ROOT/bin/aic" codex use personal >/dev/null
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-personal"
+
+cat >"$TMP/bin/pgrep" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *codex* ]]; then
+  printf '100 node /opt/homebrew/bin/codex\n'
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$TMP/bin/pgrep"
+cat >"$TMP/bin/ps" <<'SH'
+#!/usr/bin/env bash
+cat <<'OUT'
+100 1 node /opt/homebrew/bin/codex
+101 100 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex
+102 101 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex child-worker
+OUT
+SH
+chmod +x "$TMP/bin/ps"
+kill_log="$TMP/kill.log"
+output="$(AIC_TEST_KILL_LOG="$kill_log" AIC_TEST_STILL_ALIVE_PIDS="101" AIC_KILL_GRACE_SECONDS=0 "$ROOT/bin/aic" codex use company 2>&1)"
+assert_contains "$output" "Codex CLI is currently running"
+test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
+grep -q '^TERM 102$' "$kill_log"
+grep -q '^TERM 101$' "$kill_log"
+grep -q '^TERM 100$' "$kill_log"
+grep -q '^KILL 101$' "$kill_log"
+mock_no_codex_processes
+"$ROOT/bin/aic" codex use personal >/dev/null
+
+cat >"$TMP/bin/pgrep" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *codex* ]]; then
+  printf '23456 /Users/test/.vscode/extensions/openai.chatgpt-test/bin/macos-aarch64/codex app-server --analytics-default-enabled\n'
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$TMP/bin/pgrep"
+output="$("$ROOT/bin/aic" codex use company 2>&1)"
+assert_contains "$output" "VS Code Codex app-server is running"
+test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
+mock_no_codex_processes
+"$ROOT/bin/aic" codex use personal >/dev/null
+
+touch "$TMP/not-a-codex-home"
+if AIC_CODEX_HOME="$TMP/not-a-codex-home" "$ROOT/bin/aic" codex use company >/dev/null 2>&1; then
+  printf 'Expected account switch to fail when Codex home is not writable\n' >&2
+  exit 1
+fi
+test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
 output="$("$ROOT/bin/aic" list)"
 assert_contains "$output" "personal"
