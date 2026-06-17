@@ -70,6 +70,22 @@ session history.
 
 ## Add Codex accounts
 
+Login a new Codex account from the same computer:
+
+```bash
+aic codex login personal
+```
+
+This runs `codex login` with a temporary `CODEX_HOME`, saves the resulting
+`auth.json` into AI Account Center, and leaves your active `~/.codex/auth.json`
+unchanged until you explicitly switch.
+
+On a remote/headless machine:
+
+```bash
+aic codex login personal --device-auth
+```
+
 Save the account currently logged into Codex:
 
 ```bash
@@ -103,8 +119,8 @@ current file is synchronized back to its stored account so refreshed tokens are
 not lost. A timestamped backup is also created.
 
 Do not switch while another Codex CLI process is running. AI Account Center does
-not call `codex logout` or `codex login`; add another account by importing an
-auth.json copied from a computer/user where that account is already logged in.
+not call `codex logout`; account switching only swaps the live auth file after
+you confirm process cleanup.
 
 ## Add Claude
 

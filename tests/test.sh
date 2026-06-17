@@ -90,6 +90,37 @@ if printf '{\n' | "$ROOT/bin/aic" codex import incomplete >/dev/null 2>&1; then
 fi
 test ! -f "$AIC_DATA_DIR/accounts/codex/incomplete.json"
 
+cat >"$TMP/bin/codex" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "login" ]]; then
+  mkdir -p "$CODEX_HOME"
+  printf '%s\n' "$*" >"$CODEX_HOME/login-args.txt"
+  cat >"$CODEX_HOME/auth.json" <<'JSON'
+{
+  "auth_mode": "chatgpt",
+  "OPENAI_API_KEY": null,
+  "tokens": {
+    "id_token": "header.eyJlbWFpbCI6ImJyb3dzZXJAZXhhbXBsZS5jb20ifQ.signature",
+    "access_token": "access-browser",
+    "refresh_token": "refresh-browser",
+    "account_id": "account-browser"
+  },
+  "last_refresh": "2026-06-15T00:00:00Z"
+}
+JSON
+  exit 0
+fi
+printf 'unexpected codex command: %s\n' "$*" >&2
+exit 1
+SH
+chmod +x "$TMP/bin/codex"
+
+"$ROOT/bin/aic" codex login browser --device-auth >/dev/null
+test -f "$AIC_DATA_DIR/accounts/codex/browser.json"
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/browser.json")" = "account-browser"
+test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "company"
+test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
+
 "$ROOT/bin/aic" codex use personal >/dev/null
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-personal"
 
@@ -250,7 +281,7 @@ AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/d
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
 test -L "$install_bin/aic"
-test "$("$install_bin/aic" version)" = "0.9.0"
+test "$("$install_bin/aic" version)" = "0.10.0"
 
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "Background refresh:"

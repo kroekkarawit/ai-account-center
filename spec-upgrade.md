@@ -44,7 +44,7 @@ scripts are allowed only when they keep the operational model simple.
 - [x] 0. Distribution installer/update.
 - [x] 1. Robust force-close process tree.
 - [ ] 2. Slim Codex export/import.
-- [ ] 3. Built-in Codex OAuth login with browser PKCE.
+- [x] 3. Built-in Codex OAuth login with browser PKCE.
 - [ ] 4. Codex account metadata: plan and subscription expiry.
 - [ ] 5. Privacy mask mode.
 - [ ] 6. Full encrypted backup/export.
@@ -269,8 +269,8 @@ Add slim Codex account export and import
 
 ### Goal
 
-Add Codex accounts directly from AIC without running `codex login` and without
-pasting `auth.json`.
+Add Codex accounts directly from AIC without overwriting the user's active
+`~/.codex/auth.json` and without pasting `auth.json`.
 
 ### Why
 
@@ -280,14 +280,15 @@ This is the largest UX improvement. User flow becomes:
 Add Codex with browser
 → browser opens
 → user logs in
-→ AIC receives localhost callback
+→ Codex CLI receives localhost callback in a temporary CODEX_HOME
 → AIC saves account
 ```
 
-### Proposed Commands
+### Commands
 
 ```bash
-aic codex login-browser NAME
+aic codex login NAME
+aic codex login NAME --device-auth
 ```
 
 TUI entry:
@@ -296,7 +297,27 @@ TUI entry:
 Login Codex with browser
 ```
 
-### Proposed Flow
+### Implemented Flow
+
+Implemented in v0.10.0.
+
+- Create a short-lived temporary `CODEX_HOME` under AIC runtime dir.
+- Run `CODEX_HOME=<temp> codex login ...`.
+- Let the installed Codex CLI handle browser PKCE, localhost callback,
+  workspace selection, token exchange, and future endpoint/client changes.
+- Validate `<temp>/auth.json` with existing `validate_codex_auth`.
+- Save account as a standard Codex account JSON under AIC's account pool.
+- Remove the temporary `CODEX_HOME`.
+- Do not switch the active account automatically.
+
+### Rationale
+
+Reimplementing Codex OAuth would require tracking private/unstable details such
+as current client id, redirect URI, endpoint parameters, and workspace behavior.
+Delegating OAuth to the installed Codex CLI keeps AIC lightweight while still
+solving the one-computer login problem.
+
+### Rejected Direct OAuth Flow
 
 - Generate PKCE verifier and challenge.
 - Start a short-lived localhost callback server.
@@ -307,39 +328,21 @@ Login Codex with browser
 - Save account as standard Codex account JSON.
 - Stop callback server.
 
-### Implementation Options
+### Remaining Questions
 
-Preferred lightweight options:
-
-- Bash orchestration plus small `python3` callback helper.
-- Or a small `node` helper if token exchange and HTTP server are simpler there.
-
-Avoid:
-
-- Tauri.
-- Electron.
-- Long-running local server.
-
-### Questions To Resolve
-
-- Current Codex OAuth client id.
-- Current authorize URL and token URL.
-- Required scopes.
-- Exact redirect URI accepted by OpenAI for Codex.
-- Whether workspace/org selection is supported in this direct flow.
-- Whether device auth must remain as fallback for restricted workspaces.
+- Whether all Codex CLI versions support the same `codex login` arguments.
+- Whether some workspace-restricted accounts require `--device-auth`.
 
 ### Risks
 
-- OAuth endpoints and params may change.
+- If Codex CLI changes `auth.json` format, validation/import may need updates.
+- If Codex CLI changes login flags, pass-through args may need documentation.
 - Workspace device-auth policy may block some accounts.
 - Browser login can be harder to test fully offline.
 
 ### Acceptance Tests
 
-- PKCE verifier/challenge generation is deterministic under test mode.
-- Callback parser handles success and error callback.
-- Token exchange can be tested with a local mocked server.
+- Mock `codex login` writes auth.json into temporary `CODEX_HOME`.
 - Saved account validates with existing `validate_codex_auth`.
 - Failed login leaves no partial account file.
 
