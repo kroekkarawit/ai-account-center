@@ -6,7 +6,8 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.8.20"
+APP_VERSION="0.9.0"
+APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 DATA_DIR="${AIC_DATA_DIR:-$HOME/.ai-account-center}"
 CODEX_HOME_DIR="${AIC_CODEX_HOME:-$HOME/.codex}"
 CONFIG_FILE="$DATA_DIR/config.json"
@@ -2078,6 +2079,26 @@ resolve_self() {
   cd -P "$(dirname "$source")" && printf '%s/%s\n' "$PWD" "$(basename "$source")"
 }
 
+update_self() {
+  local ref="${1:-main}" script_path app_dir installer curl_args
+  script_path="$(resolve_self)"
+  app_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+  installer="$app_dir/install.sh"
+
+  if [[ -f "$installer" ]]; then
+    AIC_INSTALL_REF="$ref" bash "$installer" --remote --ref "$ref"
+    return
+  fi
+
+  require_command curl
+  curl_args=(-fsSL)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl_args+=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  fi
+  printf 'Installer not found next to this aic install. Downloading installer from %s (%s)...\n' "$APP_REPO_URL" "$ref"
+  curl "${curl_args[@]}" "$APP_REPO_URL/raw/$ref/install.sh" | AIC_INSTALL_REF="$ref" bash
+}
+
 install_launchd() {
   local interval_seconds plist script_path log_dir
   interval_seconds=$(( $(jq -r '.schedule.interval_minutes' "$CONFIG_FILE") * 60 ))
@@ -2287,6 +2308,7 @@ Usage:
   aic status                       Show cached limits for all accounts
   aic recommend                    Recommend the best Codex account to use now
   aic refresh [provider] [name]    Refresh usage
+  aic update [REF]                 Update AI Account Center from GitHub
 
 Codex accounts:
   aic codex add NAME               Save the current ~/.codex/auth.json
@@ -2384,6 +2406,7 @@ main() {
       printf '%s\n' "$CONFIG_FILE"
       jq . "$CONFIG_FILE"
       ;;
+    update) update_self "${1:-main}" ;;
     version|--version|-V) printf '%s\n' "$APP_VERSION" ;;
     help|--help|-h) print_help ;;
     *) print_help; exit 1 ;;

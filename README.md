@@ -14,10 +14,37 @@ and Claude subscription limits from one place.
 
 ## Install
 
+Install from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kroekkarawit/ai-account-center/main/install.sh | bash
+```
+
+For a private repository, use a GitHub token that can read the repo:
+
+```bash
+export GITHUB_TOKEN=ghp_xxx
+curl -fsSL \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/kroekkarawit/ai-account-center/main/install.sh | bash
+```
+
+Update later:
+
+```bash
+aic update
+```
+
+The installer copies app files to `~/.local/share/ai-account-center` and links
+`~/.local/bin/aic`. Account data remains in `~/.ai-account-center`, so updates
+do not overwrite stored tokens or cached usage.
+
+For local development:
+
 ```bash
 cd "/Users/macbookair/Desktop/Miscellaneous/ai-account-center"
 chmod +x bin/aic install.sh
-./install.sh
+./install.sh --dev
 ```
 
 Run:

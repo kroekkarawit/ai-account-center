@@ -242,6 +242,15 @@ assert_contains "$output" "12% → Jun 20, 15:00"
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
+assert_contains "$output" "aic update"
+
+install_app="$TMP/install-app"
+install_bin="$TMP/install-bin"
+AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/dev/null
+test -x "$install_app/bin/aic"
+test -x "$install_app/install.sh"
+test -L "$install_bin/aic"
+test "$("$install_bin/aic" version)" = "0.9.0"
 
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "Background refresh:"

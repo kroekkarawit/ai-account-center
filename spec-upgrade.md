@@ -36,15 +36,56 @@ scripts are allowed only when they keep the operational model simple.
 - Import supports long pasted Codex `auth.json`.
 - TUI switch warns about running Codex processes and force-closes their process
   trees after a successful account switch.
+- Installs from GitHub into `~/.local/share/ai-account-center` and supports
+  `aic update`.
 
 ## Upgrade Checklist
 
+- [x] 0. Distribution installer/update.
 - [x] 1. Robust force-close process tree.
 - [ ] 2. Slim Codex export/import.
 - [ ] 3. Built-in Codex OAuth login with browser PKCE.
 - [ ] 4. Codex account metadata: plan and subscription expiry.
 - [ ] 5. Privacy mask mode.
 - [ ] 6. Full encrypted backup/export.
+
+## 0. Distribution Installer/Update
+
+### Goal
+
+Make AI Account Center installable by non-dev users without sending a binary or
+requiring a cloned repository at a fixed path. Keep the product lightweight:
+Bash source copied to a stable app directory, no GUI bundle or resident runtime.
+
+### Current State
+
+Implemented in v0.9.0.
+
+`install.sh` supports:
+
+- Copy install to `~/.local/share/ai-account-center`.
+- Symlink command to `~/.local/bin/aic`.
+- `--dev` mode for local checkout symlink development.
+- Remote install from GitHub archive when the installer is run through `curl`.
+- `GITHUB_TOKEN` for private repository downloads.
+
+`aic update [REF]` calls the installed `install.sh` in remote mode and
+reinstalls app files from GitHub. Account data remains in
+`~/.ai-account-center`.
+
+### Requirements
+
+- Do not move or mutate stored accounts, usage cache, backups, or config.
+- Do not require users to manually edit PATH beyond adding `~/.local/bin` once.
+- Keep install/update compatible with macOS and Linux shell environments.
+- Do not add a compiled binary or package-manager dependency.
+
+### Verification
+
+- Local install: `./install.sh --dev`.
+- Copy install with isolated dirs:
+  `AIC_APP_DIR=/tmp/aic-app AIC_INSTALL_DIR=/tmp/aic-bin ./install.sh`.
+- Remote update path: `aic update` after copy install.
 
 ## 1. Robust Force-Close Process Tree
 
