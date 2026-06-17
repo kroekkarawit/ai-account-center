@@ -35,6 +35,18 @@ Update later:
 aic update
 ```
 
+Uninstall the app while keeping stored accounts and usage data:
+
+```bash
+aic uninstall
+```
+
+Remove everything, including stored account tokens:
+
+```bash
+aic uninstall --purge-data
+```
+
 The installer copies app files to `~/.local/share/ai-account-center` and links
 `~/.local/bin/aic`. Account data remains in `~/.ai-account-center`, so updates
 do not overwrite stored tokens or cached usage.

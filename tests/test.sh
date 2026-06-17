@@ -284,6 +284,7 @@ assert_contains "$output" "12% → Jun 20, 15:00"
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
 assert_contains "$output" "aic update"
+assert_contains "$output" "aic uninstall"
 
 install_app="$TMP/install-app"
 install_bin="$TMP/install-bin"
@@ -291,7 +292,15 @@ AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/d
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
 test -L "$install_bin/aic"
-test "$("$install_bin/aic" version)" = "0.10.1"
+test "$("$install_bin/aic" version)" = "0.10.2"
+
+uninstall_data="$TMP/uninstall-data"
+mkdir -p "$uninstall_data"
+touch "$uninstall_data/keep.json"
+AIC_DATA_DIR="$uninstall_data" AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$install_bin/aic" uninstall --yes >/dev/null
+test ! -e "$install_bin/aic"
+test ! -d "$install_app"
+test -f "$uninstall_data/keep.json"
 
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "Background refresh:"

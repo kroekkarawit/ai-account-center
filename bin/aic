@@ -6,9 +6,10 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.1"
+APP_VERSION="0.10.2"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
+APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
 DATA_DIR="${AIC_DATA_DIR:-$HOME/.ai-account-center}"
 CODEX_HOME_DIR="${AIC_CODEX_HOME:-$HOME/.codex}"
 CONFIG_FILE="$DATA_DIR/config.json"
@@ -2161,6 +2162,77 @@ update_self() {
   curl "${curl_args[@]}" "$APP_REPO_URL/raw/$ref/install.sh" | AIC_INSTALL_REF="$ref" bash
 }
 
+uninstall_self() {
+  local purge_data=0 assume_yes=0 arg script_path app_bin app_dir
+  for arg in "$@"; do
+    case "$arg" in
+      --purge-data) purge_data=1 ;;
+      --yes|-y) assume_yes=1 ;;
+      --help|-h)
+        cat <<HELP
+Usage:
+  aic uninstall [--yes] [--purge-data]
+
+Default removes the installed app, command link, and scheduler only.
+Account data is kept at: $DATA_DIR
+
+Options:
+  --yes         Do not ask for confirmation.
+  --purge-data  Also delete $DATA_DIR, including stored account tokens.
+HELP
+        return 0
+        ;;
+      *) die "Unknown uninstall option: $arg" ;;
+    esac
+  done
+
+  if [[ "$assume_yes" -ne 1 ]]; then
+    printf 'Uninstall AI Account Center?\n'
+    printf 'Remove app files: %s\n' "$APP_DIR"
+    printf 'Remove command: %s/aic\n' "$APP_BIN_DIR"
+    if [[ "$purge_data" -eq 1 ]]; then
+      printf '%sWARNING:%s This will also delete stored account data: %s\n' "$RED" "$RESET" "$DATA_DIR"
+    else
+      printf 'Keep account data: %s\n' "$DATA_DIR"
+    fi
+    printf 'Continue? [y/N] '
+    local answer
+    IFS= read -r answer
+    case "$answer" in
+      y|Y|yes|YES) ;;
+      *) printf 'Uninstall cancelled.\n'; return 1 ;;
+    esac
+  fi
+
+  uninstall_scheduler 2>/dev/null || true
+
+  script_path="$(resolve_self)"
+  app_bin="$APP_BIN_DIR/aic"
+  app_dir="$APP_DIR"
+
+  if [[ -e "$app_bin" || -L "$app_bin" ]]; then
+    rm -f "$app_bin"
+    printf 'Removed command: %s\n' "$app_bin"
+  fi
+
+  if [[ -d "$app_dir" ]]; then
+    rm -rf "$app_dir"
+    printf 'Removed app files: %s\n' "$app_dir"
+  elif [[ "$script_path" == "$app_bin" && -f "$script_path" ]]; then
+    rm -f "$script_path"
+    printf 'Removed legacy command file: %s\n' "$script_path"
+  fi
+
+  if [[ "$purge_data" -eq 1 ]]; then
+    rm -rf "$DATA_DIR"
+    printf 'Removed account data: %s\n' "$DATA_DIR"
+  else
+    printf 'Kept account data: %s\n' "$DATA_DIR"
+  fi
+
+  printf 'Uninstalled AI Account Center.\n'
+}
+
 install_launchd() {
   local interval_seconds plist script_path log_dir
   interval_seconds=$(( $(jq -r '.schedule.interval_minutes' "$CONFIG_FILE") * 60 ))
@@ -2377,6 +2449,7 @@ Usage:
   aic recommend                    Recommend the best Codex account to use now
   aic refresh [provider] [name]    Refresh usage
   aic update [REF]                 Update AI Account Center from GitHub
+  aic uninstall [--purge-data]     Remove app install; keeps account data by default
 
 Codex accounts:
   aic codex login NAME [ARGS]      Login through Codex browser OAuth in temp home
@@ -2406,12 +2479,18 @@ HELP
 }
 
 main() {
+  local command="${1:-tui}"
+  shift || true
+  case "$command" in
+    uninstall) uninstall_self "$@"; return ;;
+    version|--version|-V) printf '%s\n' "$APP_VERSION"; return ;;
+    help|--help|-h) print_help; return ;;
+  esac
+
   require_command jq
   ensure_dirs
   reconcile_active_codex
 
-  local command="${1:-tui}"
-  shift || true
   case "$command" in
     tui) interactive_menu ;;
     status) print_status ;;
@@ -2482,8 +2561,6 @@ main() {
       jq . "$CONFIG_FILE"
       ;;
     update) update_self "${1:-main}" ;;
-    version|--version|-V) printf '%s\n' "$APP_VERSION" ;;
-    help|--help|-h) print_help ;;
     *) print_help; exit 1 ;;
   esac
 }
