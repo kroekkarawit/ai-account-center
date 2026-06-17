@@ -219,6 +219,16 @@ assert_contains "$output" "5h usage is low"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "company"
 
+legacy_bin="$TMP/legacy-bin"
+legacy_app="$TMP/legacy-app"
+mkdir -p "$legacy_bin"
+AIC_APP_DIR="$legacy_app" AIC_INSTALL_DIR="$legacy_bin" "$ROOT/install.sh" >/dev/null
+rm -f "$legacy_bin/aic"
+cp "$legacy_app/bin/aic" "$legacy_bin/aic"
+chmod +x "$legacy_bin/aic"
+AIC_APP_DIR="$legacy_app" "$legacy_bin/aic" refresh codex personal
+test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "88"
+
 cat >"$TMP/bin/curl" <<'SH'
 #!/usr/bin/env bash
 if [[ "$*" == *"/api/oauth/usage"* ]]; then
@@ -281,7 +291,7 @@ AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/d
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
 test -L "$install_bin/aic"
-test "$("$install_bin/aic" version)" = "0.10.0"
+test "$("$install_bin/aic" version)" = "0.10.1"
 
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "Background refresh:"

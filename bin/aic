@@ -6,8 +6,9 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.0"
+APP_VERSION="0.10.1"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
+APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 DATA_DIR="${AIC_DATA_DIR:-$HOME/.ai-account-center}"
 CODEX_HOME_DIR="${AIC_CODEX_HOME:-$HOME/.codex}"
 CONFIG_FILE="$DATA_DIR/config.json"
@@ -115,6 +116,32 @@ info() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+find_codex_rate_limit_helper() {
+  local script_path script_root candidate
+  if [[ -n "${AIC_CODEX_RATE_LIMIT_HELPER:-}" ]]; then
+    [[ -f "$AIC_CODEX_RATE_LIMIT_HELPER" ]] && {
+      printf '%s' "$AIC_CODEX_RATE_LIMIT_HELPER"
+      return 0
+    }
+  fi
+
+  script_path="$(resolve_self)"
+  script_root="$(cd "$(dirname "$script_path")/.." && pwd)"
+  for candidate in \
+    "$script_root/lib/codex-rate-limits.mjs" \
+    "$APP_DIR/lib/codex-rate-limits.mjs" \
+    "$HOME/.local/share/ai-account-center/lib/codex-rate-limits.mjs"
+  do
+    if [[ -f "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s' "$script_root/lib/codex-rate-limits.mjs"
+  return 1
 }
 
 running_codex_processes() {
@@ -937,7 +964,8 @@ refresh_codex_account() {
   runtime="$RUNTIME_DIR/codex-$name"
   output="$RUNTIME_DIR/codex-$name-rate-limits.json"
   timeout_seconds="$(jq -r '.monitor.codex.timeout_seconds // 120' "$CONFIG_FILE")"
-  helper="$(cd "$(dirname "$(resolve_self)")/.." && pwd)/lib/codex-rate-limits.mjs"
+  helper="$(find_codex_rate_limit_helper)" ||
+    die "Missing Codex rate-limit helper. Reinstall with: curl -fsSL $APP_REPO_URL/raw/main/install.sh | bash"
   [[ -f "$helper" ]] || die "Missing Codex rate-limit helper: $helper"
   require_command node
 
