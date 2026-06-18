@@ -306,8 +306,20 @@ test -f "$uninstall_data/keep.json"
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "refresh:"
 
-"$ROOT/bin/aic" codex remove company >/dev/null
+"$ROOT/bin/aic" codex rename company company-renamed >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/codex/company.json"
+test -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/company-renamed.json")" = "account-company"
+
+printf 'claude-rename-test\n' | "$ROOT/bin/aic" claude add rename-src >/dev/null
+"$ROOT/bin/aic" claude rename rename-src rename-dst >/dev/null
+test ! -f "$AIC_DATA_DIR/accounts/claude/rename-src.json"
+test -f "$AIC_DATA_DIR/accounts/claude/rename-dst.json"
+test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/rename-dst.json")" = "claude-rename-test"
+"$ROOT/bin/aic" claude remove rename-dst >/dev/null
+
+"$ROOT/bin/aic" codex remove company-renamed >/dev/null
+test ! -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
 test "$(jq -r '.active_codex_account // empty' "$AIC_DATA_DIR/state.json")" = ""
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 

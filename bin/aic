@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.4"
+APP_VERSION="0.10.5"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -948,6 +948,168 @@ remove_claude() {
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   rm -f "$file" "$(usage_file claude "$name")"
   printf 'Removed Claude account: %s\n' "$name"
+}
+
+rename_codex_account() {
+  local old_name="$1" new_name="$2"
+  validate_name "$old_name"
+  validate_name "$new_name"
+  local old_file new_file
+  old_file="$(codex_account_file "$old_name")"
+  new_file="$(codex_account_file "$new_name")"
+  [[ -f "$old_file" ]] || die "Unknown Codex account: $old_name"
+  [[ ! -f "$new_file" ]] || die "Account name already exists: $new_name"
+  mv "$old_file" "$new_file"
+  local old_usage new_usage
+  old_usage="$(usage_file codex "$old_name")"
+  new_usage="$(usage_file codex "$new_name")"
+  [[ -f "$old_usage" ]] && mv "$old_usage" "$new_usage" || true
+  local active
+  active="$(active_codex_name)"
+  [[ "$active" == "$old_name" ]] && set_active_codex_name "$new_name"
+  printf 'Renamed Codex account: %s → %s\n' "$old_name" "$new_name"
+}
+
+rename_claude_account() {
+  local old_name="$1" new_name="$2"
+  validate_name "$old_name"
+  validate_name "$new_name"
+  local old_file new_file
+  old_file="$(claude_account_file "$old_name")"
+  new_file="$(claude_account_file "$new_name")"
+  [[ -f "$old_file" ]] || die "Unknown Claude account: $old_name"
+  [[ ! -f "$new_file" ]] || die "Account name already exists: $new_name"
+  mv "$old_file" "$new_file"
+  local old_usage new_usage
+  old_usage="$(usage_file claude "$old_name")"
+  new_usage="$(usage_file claude "$new_name")"
+  [[ -f "$old_usage" ]] && mv "$old_usage" "$new_usage" || true
+  printf 'Renamed Claude account: %s → %s\n' "$old_name" "$new_name"
+}
+
+relogin_codex_browser() {
+  local name="$1"
+  shift || true
+  validate_name "$name"
+  local existing_file backup
+  existing_file="$(codex_account_file "$name")"
+  [[ -f "$existing_file" ]] || die "Unknown Codex account: $name"
+  backup="$existing_file.relogin-$$"
+  cp "$existing_file" "$backup"
+  chmod 600 "$backup"
+  rm -f "$existing_file"
+  if login_codex_browser "$name" "$@"; then
+    rm -f "$backup"
+    printf 'Re-login complete for account: %s\n' "$name"
+  else
+    mv "$backup" "$existing_file"
+    warn "Re-login failed. Original credentials restored for: $name"
+    return 1
+  fi
+}
+
+reimport_codex_auth_json() {
+  local name="$1" source="${2:-}"
+  validate_name "$name"
+  local existing_file backup
+  existing_file="$(codex_account_file "$name")"
+  [[ -f "$existing_file" ]] || die "Unknown Codex account: $name"
+  backup="$existing_file.reimport-$$"
+  cp "$existing_file" "$backup"
+  chmod 600 "$backup"
+  rm -f "$existing_file"
+  if import_codex_auth_json "$name" "$source"; then
+    rm -f "$backup"
+  else
+    mv "$backup" "$existing_file"
+    warn "Re-import failed. Original credentials restored for: $name"
+    return 1
+  fi
+}
+
+manage_account_menu() {
+  local options=() item provider name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && options+=("Codex  | $name")
+  done < <(codex_names)
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && options+=("Claude | $name")
+  done < <(claude_names)
+
+  [[ "${#options[@]}" -gt 0 ]] || { warn "No accounts found."; return 1; }
+
+  item="$(choose_from "Select account to manage" "${options[@]}")" || return 1
+  provider="${item%%|*}"
+  provider="${provider// /}"
+  name="${item#*| }"
+  name="${name## }"
+
+  local sub_options=()
+  if [[ "$provider" == "Codex" ]]; then
+    sub_options=(
+      "↻  Refresh this account::refresh"
+      "✎  Rename::rename"
+      "◎  Re-login with browser::relogin"
+      "⇢  Re-import auth.json::reimport"
+      "×  Remove::remove"
+    )
+  else
+    sub_options=(
+      "↻  Refresh this account::refresh"
+      "✎  Rename::rename"
+      "◇  Re-login OAuth::relogin"
+      "◈  Update token::update-token"
+      "×  Remove::remove"
+    )
+  fi
+
+  local sub_action new_name
+  sub_action="$(choose_from "Manage $provider: $name" "${sub_options[@]}")" || return 1
+  sub_action="${sub_action##*::}"
+
+  case "$sub_action" in
+    refresh)
+      if [[ "$provider" == "Codex" ]]; then
+        refresh_codex_account "$name"
+      else
+        refresh_claude_account "$name"
+      fi
+      ;;
+    rename)
+      printf 'New name: '
+      IFS= read -r new_name
+      [[ -n "$new_name" ]] || return 0
+      if [[ "$provider" == "Codex" ]]; then
+        with_lock rename_codex_account "$name" "$new_name"
+      else
+        rename_claude_account "$name" "$new_name"
+      fi
+      ;;
+    relogin)
+      if [[ "$provider" == "Codex" ]]; then
+        with_lock relogin_codex_browser "$name"
+      else
+        login_claude "$name"
+      fi
+      ;;
+    reimport)
+      with_lock reimport_codex_auth_json "$name"
+      ;;
+    update-token)
+      add_claude_token "$name"
+      ;;
+    remove)
+      local answer
+      answer="$(choose_from "Remove $provider account '$name'?" "No, cancel" "Yes, remove it")" || return 1
+      if [[ "$answer" == "Yes, remove it" ]]; then
+        if [[ "$provider" == "Codex" ]]; then
+          with_lock remove_codex_impl "$name"
+        else
+          remove_claude "$name"
+        fi
+      fi
+      ;;
+  esac
 }
 
 iso_from_epoch() {
@@ -2479,7 +2641,7 @@ interactive_menu() {
         IFS= read -r name
         add_claude_token "$name"
         ;;
-      remove) interactive_remove ;;
+      manage) manage_account_menu ;;
       refresh-all) refresh_all || true ;;
       schedule)
         local interval
@@ -2594,7 +2756,8 @@ main() {
           exec codex "$@"
           ;;
         remove) [[ -n "${1:-}" ]] || die "Account name required."; with_lock remove_codex_impl "$1" ;;
-        *) die "Use: aic codex login|add|import|use|run|remove" ;;
+        rename) [[ -n "${1:-}" && -n "${2:-}" ]] || die "Usage: aic codex rename OLD NEW"; with_lock rename_codex_account "$1" "$2" ;;
+        *) die "Use: aic codex login|add|import|use|run|remove|rename" ;;
       esac
       ;;
     claude)
@@ -2605,8 +2768,9 @@ main() {
         import) [[ -n "${1:-}" ]] || die "Account name required."; import_current_claude "$1" ;;
         add) [[ -n "${1:-}" ]] || die "Account name required."; add_claude_token "$1" "${2:-}" ;;
         remove) [[ -n "${1:-}" ]] || die "Account name required."; remove_claude "$1" ;;
+        rename) [[ -n "${1:-}" && -n "${2:-}" ]] || die "Usage: aic claude rename OLD NEW"; rename_claude_account "$1" "$2" ;;
         setup-token) exec claude setup-token ;;
-        *) die "Use: aic claude login|import|add|remove|setup-token" ;;
+        *) die "Use: aic claude login|import|add|remove|rename|setup-token" ;;
       esac
       ;;
     schedule)
