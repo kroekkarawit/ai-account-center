@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.5"
+APP_VERSION="0.10.6"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -1799,20 +1799,38 @@ uppercase() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
 }
 
-print_dashboard_header() {
-  local active interval enabled schedule_text title_line state_line timezone
-  active="$(active_codex_name)"
-  interval="$(jq -r '.schedule.interval_minutes // 60' "$CONFIG_FILE")"
+next_refresh_countdown() {
+  local enabled interval_minutes
   enabled="$(jq -r '.schedule.enabled // false' "$CONFIG_FILE")"
-  timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
-  if [[ "$enabled" == "true" ]]; then
-    schedule_text="every ${interval}m"
+  [[ "$enabled" == "true" ]] || { printf 'off'; return 0; }
+  interval_minutes="$(jq -r '.schedule.interval_minutes // 60' "$CONFIG_FILE")"
+  [[ "$interval_minutes" =~ ^[0-9]+$ ]] || interval_minutes=60
+
+  local updated updated_epoch now remaining
+  updated="$(jq -r '.updated_at // empty' "$REFRESH_STATUS_FILE" 2>/dev/null)"
+  [[ -n "$updated" ]] || { printf 'every %sm' "$interval_minutes"; return 0; }
+  updated_epoch="$(epoch_from_iso "$updated")"
+  [[ -n "$updated_epoch" ]] || { printf 'every %sm' "$interval_minutes"; return 0; }
+
+  now="$(date +%s)"
+  remaining=$(( updated_epoch + interval_minutes * 60 - now ))
+  if ((remaining <= 0)); then
+    printf 'due now'
+  elif ((remaining < 60)); then
+    printf 'in %ds' "$remaining"
   else
-    schedule_text="disabled"
+    printf 'in %dm' "$((remaining / 60))"
   fi
+}
+
+print_dashboard_header() {
+  local active schedule_text title_line state_line timezone
+  active="$(active_codex_name)"
+  timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
+  schedule_text="$(next_refresh_countdown)"
 
   title_line="AI ACCOUNT CENTER  v$APP_VERSION"
-  state_line="Active Codex: ${active:-none}  |  Monitor: $schedule_text  |  TZ: $timezone"
+  state_line="Active Codex: ${active:-none}  |  Next refresh: $schedule_text  |  TZ: $timezone"
   printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
   printf '%s|%s %s%-76s%s %s|%s\n' \
     "$CYAN" "$RESET" "$BOLD" "$title_line" "$RESET" "$CYAN" "$RESET"
