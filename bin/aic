@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.7"
+APP_VERSION="0.10.8"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -1946,18 +1946,28 @@ choose_from() {
     printf '%s' "${value%%::*}"
   }
 
+  local show_numbers=0
+  ((${#options[@]} <= 9)) && show_numbers=1
+
   local rendered=0
   while true; do
     if ((rendered == 0)); then
       printf '%s%s%s\n' "$BOLD" "$prompt" "$RESET" >&2
-      printf '%s  Use Up/Down or j/k, Enter to select, Esc/q to cancel%s\n' "$DIM" "$RESET" >&2
+      if ((show_numbers)); then
+        printf '%s  Up/Down or j/k, Enter to confirm, 1-%d to jump+confirm, Esc/q cancel%s\n' \
+          "$DIM" "${#options[@]}" "$RESET" >&2
+      else
+        printf '%s  Use Up/Down or j/k, Enter to select, Esc/q to cancel%s\n' "$DIM" "$RESET" >&2
+      fi
       for ((i = 0; i < ${#options[@]}; i++)); do
         local label
         label="$(option_label "${options[$i]}")"
+        local num_prefix="  "
+        ((show_numbers)) && num_prefix="$((i+1)) "
         if ((i == selected)); then
-          printf '  %s%s> %-44s%s\n' "$CYAN" "$REVERSE" "$label" "$RESET" >&2
+          printf ' %s%s%s> %-44s%s\n' "$DIM" "$num_prefix" "$RESET$CYAN$REVERSE" "$label" "$RESET" >&2
         else
-          printf '    %-44s\n' "$label" >&2
+          printf ' %s%s%s  %-44s%s\n' "$DIM" "$num_prefix" "$RESET" "$label" "$RESET" >&2
         fi
       done
       printf '\n' >&2
@@ -2006,8 +2016,10 @@ choose_from() {
         return 1
         ;;
       [1-9])
-        if ((key <= ${#options[@]})); then
-          selected=$((key - 1))
+        if ((show_numbers && key <= ${#options[@]})); then
+          exec 3<&-
+          printf '%s\n' "${options[$((key - 1))]}"
+          return 0
         fi
         ;;
     esac
