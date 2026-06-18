@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.6"
+APP_VERSION="0.10.7"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -2594,6 +2594,101 @@ schedule_status() {
   esac
 }
 
+config_set() {
+  local key="$1" value="$2"
+  [[ -n "$key" && -n "$value" ]] || die "Usage: aic config set KEY VALUE"
+  local tmp
+  tmp="$(jq --arg k "$key" --arg v "$value" 'getpath($k|split(".")) as $cur |
+    if $cur == null or ($cur|type) == "string" then setpath($k|split("."); $v)
+    elif ($cur|type) == "number" then setpath($k|split("."); ($v|tonumber))
+    elif ($cur|type) == "boolean" then setpath($k|split("."); ($v == "true"))
+    else setpath($k|split("."); $v) end' "$CONFIG_FILE")" || die "Could not update config."
+  chmod 600 <(printf '%s' "$tmp") 2>/dev/null || true
+  printf '%s' "$tmp" >"$CONFIG_FILE.tmp"
+  chmod 600 "$CONFIG_FILE.tmp"
+  mv -f "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  printf 'Set %s = %s\n' "$key" "$value"
+}
+
+interactive_config_editor() {
+  local tz codex_on codex_timeout claude_on claude_timeout probe_model sched_on sched_interval
+  local field new_val
+
+  while true; do
+    tz="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
+    codex_on="$(jq -r '.monitor.codex.enabled // true' "$CONFIG_FILE")"
+    codex_timeout="$(jq -r '.monitor.codex.timeout_seconds // 120' "$CONFIG_FILE")"
+    claude_on="$(jq -r '.monitor.claude.enabled // true' "$CONFIG_FILE")"
+    claude_timeout="$(jq -r '.monitor.claude.timeout_seconds // 15' "$CONFIG_FILE")"
+    probe_model="$(jq -r '.monitor.claude.probe_model // "claude-haiku-4-5-20251001"' "$CONFIG_FILE")"
+    sched_on="$(jq -r '.schedule.enabled // false' "$CONFIG_FILE")"
+    sched_interval="$(jq -r '.schedule.interval_minutes // 60' "$CONFIG_FILE")"
+
+    local sched_label
+    [[ "$sched_on" == "true" ]] && sched_label="every ${sched_interval}m" || sched_label="off"
+
+    field="$(choose_from "Settings  (Enter to edit, q to close)" \
+      "Timezone              $tz::timezone" \
+      "Codex monitor         $codex_on::codex-enabled" \
+      "Codex timeout         ${codex_timeout}s::codex-timeout" \
+      "Claude monitor        $claude_on::claude-enabled" \
+      "Claude timeout        ${claude_timeout}s::claude-timeout" \
+      "Claude probe model    $probe_model::claude-model" \
+      "Schedule              $sched_label::schedule" \
+    )" || return 0
+    field="${field##*::}"
+
+    case "$field" in
+      timezone)
+        printf 'Timezone (e.g. Asia/Bangkok, America/New_York) [%s]: ' "$tz"
+        IFS= read -r new_val
+        [[ -n "$new_val" ]] || continue
+        config_set display.timezone "$new_val"
+        ;;
+      codex-enabled)
+        [[ "$codex_on" == "true" ]] && new_val="false" || new_val="true"
+        config_set monitor.codex.enabled "$new_val"
+        ;;
+      codex-timeout)
+        printf 'Codex timeout seconds [%s]: ' "$codex_timeout"
+        IFS= read -r new_val
+        [[ "$new_val" =~ ^[0-9]+$ ]] || { warn "Must be a number."; continue; }
+        config_set monitor.codex.timeout_seconds "$new_val"
+        ;;
+      claude-enabled)
+        [[ "$claude_on" == "true" ]] && new_val="false" || new_val="true"
+        config_set monitor.claude.enabled "$new_val"
+        ;;
+      claude-timeout)
+        printf 'Claude timeout seconds [%s]: ' "$claude_timeout"
+        IFS= read -r new_val
+        [[ "$new_val" =~ ^[0-9]+$ ]] || { warn "Must be a number."; continue; }
+        config_set monitor.claude.timeout_seconds "$new_val"
+        ;;
+      claude-model)
+        printf 'Claude probe model [%s]: ' "$probe_model"
+        IFS= read -r new_val
+        [[ -n "$new_val" ]] || continue
+        config_set monitor.claude.probe_model "$new_val"
+        ;;
+      schedule)
+        local interval
+        interval="$(choose_from "Schedule interval" \
+          "Every 15 minutes::15" "Every 30 minutes::30" "Every hour::60" \
+          "Every 2 hours::120" "Every 4 hours::240" "Every 6 hours::360" \
+          "Disable schedule::off"
+        )" || continue
+        interval="${interval##*::}"
+        if [[ "$interval" == "off" ]]; then
+          disable_schedule
+        else
+          set_schedule_interval "${interval}m"
+        fi
+        ;;
+    esac
+  done
+}
+
 interactive_menu() {
   local name
   start_background_refresh_for_tui
@@ -2617,8 +2712,8 @@ interactive_menu() {
         "$(menu_item claude-import "Import current Claude login" claude-import)" \
         "$(menu_item claude-token "Add Claude token manually" claude-add-token)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
-        "$(menu_item schedule "Configure schedule" schedule)" \
-        "$(menu_item remove "Remove an account" remove)" \
+        "$(menu_item manage "Manage accounts" manage)" \
+        "$(menu_item schedule "Settings" settings)" \
         "$(menu_item list "List accounts" list)" \
         "$(menu_item help "Help / คู่มือ" help)" \
         "$(menu_item exit "Exit" exit)"
@@ -2661,18 +2756,7 @@ interactive_menu() {
         ;;
       manage) manage_account_menu ;;
       refresh-all) refresh_all || true ;;
-      schedule)
-        local interval
-        interval="$(
-          choose_from "Monitor interval" \
-            "15m" "30m" "1h" "2h" "4h" "6h" "off"
-        )" || true
-        if [[ "$interval" == "off" ]]; then
-          disable_schedule
-        elif [[ -n "$interval" ]]; then
-          set_schedule_interval "$interval"
-        fi
-        ;;
+      settings) interactive_config_editor ;;
       list) list_accounts ;;
       help) interactive_help ;;
       exit) return 0 ;;
