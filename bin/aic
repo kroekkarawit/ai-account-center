@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.8"
+APP_VERSION="0.11.0"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -65,9 +65,12 @@ menu_icon() {
       codex-login) printf '◎' ;;
       codex-add) printf '＋' ;;
       codex-import) printf '⇢' ;;
+      add-codex) printf '＋' ;;
+      add-claude) printf '◈' ;;
       claude-login) printf '◇' ;;
       claude-import) printf '⇠' ;;
       claude-token) printf '◈' ;;
+      manage) printf '✎' ;;
       refresh) printf '↻' ;;
       schedule) printf '⏱' ;;
       remove) printf '×' ;;
@@ -83,9 +86,12 @@ menu_icon() {
       codex-login) printf 'C@' ;;
       codex-add) printf 'C+' ;;
       codex-import) printf 'C<' ;;
-      claude-login) printf 'A+' ;;
+      add-codex) printf 'C+' ;;
+      add-claude) printf 'A+' ;;
+      claude-login) printf 'A@' ;;
       claude-import) printf 'A<' ;;
       claude-token) printf 'A#' ;;
+      manage) printf 'M~' ;;
       refresh) printf 'R*' ;;
       schedule) printf 'T~' ;;
       remove) printf 'X-' ;;
@@ -2702,7 +2708,7 @@ interactive_config_editor() {
 }
 
 interactive_menu() {
-  local name
+  local name active_name open_label sched_label
   start_background_refresh_for_tui
   while true; do
     reconcile_active_codex
@@ -2712,21 +2718,26 @@ interactive_menu() {
     print_status
     refresh_status_line
     printf '\n'
+
+    active_name="$(active_codex_name)"
+    if [[ -n "$active_name" ]]; then
+      open_label="Open active Codex  [$active_name]"
+    else
+      open_label="Open active Codex"
+    fi
+
+    sched_label="Settings  ($(next_refresh_countdown))"
+
     local action
     action="$(
       AIC_REDRAW_ON_REFRESH_DONE=1 choose_from "Action" \
         "$(menu_item codex-switch "Switch Codex account" codex-switch)" \
-        "$(menu_item codex-open "Open active Codex" codex-open)" \
-        "$(menu_item codex-login "Login Codex with browser" codex-login)" \
-        "$(menu_item codex-add "Add current Codex auth.json" codex-add-current)" \
-        "$(menu_item codex-import "Import another Codex auth.json" codex-import)" \
-        "$(menu_item claude-login "Login Claude OAuth" claude-login)" \
-        "$(menu_item claude-import "Import current Claude login" claude-import)" \
-        "$(menu_item claude-token "Add Claude token manually" claude-add-token)" \
+        "$(menu_item codex-open "$open_label" codex-open)" \
+        "$(menu_item add-codex "Add Codex account →" add-codex)" \
+        "$(menu_item add-claude "Add Claude account →" add-claude)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
         "$(menu_item manage "Manage accounts" manage)" \
-        "$(menu_item schedule "Settings" settings)" \
-        "$(menu_item list "List accounts" list)" \
+        "$(menu_item schedule "$sched_label" settings)" \
         "$(menu_item help "Help / คู่มือ" help)" \
         "$(menu_item exit "Exit" exit)"
     )" || return 0
@@ -2736,40 +2747,61 @@ interactive_menu() {
     case "$action" in
       codex-switch) interactive_use ;;
       codex-open) exec codex ;;
-      codex-login)
-        printf 'Account name: '
-        IFS= read -r name
-        with_lock login_codex_browser "$name"
+      add-codex)
+        local sub
+        sub="$(choose_from "Add Codex account" \
+          "$(menu_item codex-login "Login with browser" codex-login)" \
+          "$(menu_item codex-add  "Save current session" codex-add-current)" \
+          "$(menu_item codex-import "Import from file or paste" codex-import)" \
+        )" || continue
+        sub="${sub##*::}"
+        case "$sub" in
+          codex-login)
+            printf 'Account name: '
+            IFS= read -r name
+            with_lock login_codex_browser "$name"
+            ;;
+          codex-add-current)
+            printf 'Account name: '
+            IFS= read -r name
+            with_lock save_live_codex_as "$name"
+            ;;
+          codex-import)
+            printf 'Account name: '
+            IFS= read -r name
+            with_lock import_codex_auth_json "$name"
+            ;;
+        esac
         ;;
-      codex-add-current)
-        printf 'Account name: '
-        IFS= read -r name
-        with_lock save_live_codex_as "$name"
-        ;;
-      codex-import)
-        printf 'Account name: '
-        IFS= read -r name
-        with_lock import_codex_auth_json "$name"
-        ;;
-      claude-login)
-        printf 'Account name: '
-        IFS= read -r name
-        login_claude "$name"
-        ;;
-      claude-import)
-        printf 'Account name: '
-        IFS= read -r name
-        import_current_claude "$name"
-        ;;
-      claude-add-token)
-        printf 'Account name: '
-        IFS= read -r name
-        add_claude_token "$name"
+      add-claude)
+        local sub
+        sub="$(choose_from "Add Claude account" \
+          "$(menu_item claude-login "Login with OAuth" claude-login)" \
+          "$(menu_item claude-import "Import current login" claude-import)" \
+          "$(menu_item claude-token "Add token manually" claude-add-token)" \
+        )" || continue
+        sub="${sub##*::}"
+        case "$sub" in
+          claude-login)
+            printf 'Account name: '
+            IFS= read -r name
+            login_claude "$name"
+            ;;
+          claude-import)
+            printf 'Account name: '
+            IFS= read -r name
+            import_current_claude "$name"
+            ;;
+          claude-add-token)
+            printf 'Account name: '
+            IFS= read -r name
+            add_claude_token "$name"
+            ;;
+        esac
         ;;
       manage) manage_account_menu ;;
       refresh-all) refresh_all || true ;;
       settings) interactive_config_editor ;;
-      list) list_accounts ;;
       help) interactive_help ;;
       exit) return 0 ;;
     esac
