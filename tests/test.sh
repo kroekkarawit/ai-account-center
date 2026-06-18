@@ -323,6 +323,53 @@ test ! -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
 test "$(jq -r '.active_codex_account // empty' "$AIC_DATA_DIR/state.json")" = ""
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 
+# Claude account switch tests
+# Create a full OAuth account (future expiresAt = not expired)
+future_ms=$(( ($(date +%s) + 3600) * 1000 ))
+oauth_blob="$(jq -n \
+  --argjson exp "$future_ms" \
+  '{claudeAiOauth:{accessToken:"sk-ant-oat01-test",refreshToken:"sk-ant-ort01-test",expiresAt:$exp,scopes:["user:inference"],subscriptionType:"pro",rateLimitTier:"default"},organizationUuid:"test-org-uuid",created_at:"2026-01-01T00:00:00Z"}')"
+printf '%s\n' "$oauth_blob" >"$AIC_DATA_DIR/accounts/claude/switch-test.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/switch-test.json"
+
+# Set up a fake live keychain file
+CLAUDE_CRED_FILE="$TMP/claude-creds.json"
+export CLAUDE_CRED_FILE
+printf '{"claudeAiOauth":{"accessToken":"old-token","refreshToken":"old-rt","expiresAt":1000},"organizationUuid":"old-org","mcpOAuth":{"plugin:test":{"accessToken":"mcp-token"}}}\n' >"$CLAUDE_CRED_FILE"
+
+# Switch to the new account
+"$ROOT/bin/aic" claude use switch-test >/dev/null
+
+# Verify: accessToken and orgUuid updated, mcpOAuth preserved
+test "$(jq -r '.claudeAiOauth.accessToken' "$CLAUDE_CRED_FILE")" = "sk-ant-oat01-test"
+test "$(jq -r '.organizationUuid' "$CLAUDE_CRED_FILE")" = "test-org-uuid"
+test "$(jq -r '.mcpOAuth["plugin:test"].accessToken' "$CLAUDE_CRED_FILE")" = "mcp-token"
+test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "switch-test"
+
+# Verify expired token detection: create account with past expiresAt
+past_ms=$(( ($(date +%s) - 3600) * 1000 ))
+expired_blob="$(jq -n \
+  --argjson exp "$past_ms" \
+  '{claudeAiOauth:{accessToken:"sk-ant-oat01-expired",refreshToken:"sk-ant-ort01-expired",expiresAt:$exp,scopes:["user:inference"],subscriptionType:"pro",rateLimitTier:"default"},organizationUuid:"expired-org","created_at":"2026-01-01T00:00:00Z"}')"
+printf '%s\n' "$expired_blob" >"$AIC_DATA_DIR/accounts/claude/expired-test.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/expired-test.json"
+
+# Switching with expired token writes it to keychain and calls claude auth status;
+# since there's no real claude, the refresh fails gracefully but switch still happens
+"$ROOT/bin/aic" claude use expired-test 2>/dev/null || true
+test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "expired-test"
+
+# Verify token-only accounts (from add_claude_token) cannot switch
+if "$ROOT/bin/aic" claude use personal 2>/dev/null; then
+  printf 'ERROR: token-only account should have failed switch\n' >&2
+  exit 1
+fi
+
+# Clean up
+"$ROOT/bin/aic" claude remove switch-test >/dev/null
+"$ROOT/bin/aic" claude remove expired-test >/dev/null
+unset CLAUDE_CRED_FILE
+
 "$ROOT/bin/aic" claude remove personal >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/personal.json"
 
