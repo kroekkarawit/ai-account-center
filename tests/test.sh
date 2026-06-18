@@ -292,7 +292,7 @@ AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/d
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
 test -L "$install_bin/aic"
-test "$("$install_bin/aic" version)" = "0.10.2"
+test "$("$install_bin/aic" version)" = "0.10.3"
 
 uninstall_data="$TMP/uninstall-data"
 mkdir -p "$uninstall_data"
@@ -303,7 +303,7 @@ test ! -d "$install_app"
 test -f "$uninstall_data/keep.json"
 
 output="$(printf 'q' | "$ROOT/bin/aic")"
-assert_contains "$output" "Background refresh:"
+assert_contains "$output" "refresh:"
 
 "$ROOT/bin/aic" codex remove company >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/codex/company.json"

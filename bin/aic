@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.2"
+APP_VERSION="0.10.3"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -959,6 +959,7 @@ refresh_codex_account() {
   local enabled
   enabled="$(jq -r '.monitor.codex.enabled // true' "$CONFIG_FILE")"
   [[ "$enabled" == "true" ]] || return 0
+  require_command node
   require_command codex
 
   local runtime output timeout_seconds helper
@@ -968,7 +969,6 @@ refresh_codex_account() {
   helper="$(find_codex_rate_limit_helper)" ||
     die "Missing Codex rate-limit helper. Reinstall with: curl -fsSL $APP_REPO_URL/raw/main/install.sh | bash"
   [[ -f "$helper" ]] || die "Missing Codex rate-limit helper: $helper"
-  require_command node
 
   rm -rf "$runtime"
   mkdir -p "$runtime"
@@ -1002,6 +1002,7 @@ refresh_codex_account() {
     [[ -n "$error_message" ]] ||
       error_message="Codex app-server returned no rate-limit metadata (exit $status)."
     write_error_usage codex "$name" "$error_message"
+    rm -rf "$runtime"
     return 1
   fi
 
@@ -1032,6 +1033,7 @@ refresh_codex_account() {
     }' >"$destination.tmp"
   chmod 600 "$destination.tmp"
   mv -f "$destination.tmp" "$destination"
+  rm -rf "$runtime"
   return 0
 }
 
@@ -1167,54 +1169,77 @@ refresh_claude_account() {
 }
 
 refresh_all() {
-  local mode="${1:-manual}" failures=0 successes=0 found=0 name total=0 done=0
-  if [[ "$mode" == "background" ]]; then
-    total="$(
-      find "$CODEX_ACCOUNTS_DIR" "$CLAUDE_ACCOUNTS_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' '
-    )"
-    write_refresh_status running "$done" "$total" "" "$successes" "$failures"
+  local mode="${1:-manual}" failures=0 successes=0 found=0 total=0
+  local result_dir pids=() job_keys=() file name
+
+  for file in "$CODEX_ACCOUNTS_DIR"/*.json "$CLAUDE_ACCOUNTS_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    total=$((total + 1))
+    found=1
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    warn "No accounts have been added."
+    return 1
   fi
+
+  [[ "$mode" == "background" ]] && write_refresh_status running 0 "$total" "" 0 0
+
+  result_dir="$RUNTIME_DIR/refresh-$$"
+  mkdir -p "$result_dir"
 
   for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
     [[ -e "$file" ]] || continue
-    found=1
     name="$(basename "$file" .json)"
-    [[ "$mode" == "background" ]] && write_refresh_status running "$done" "$total" "codex/$name" "$successes" "$failures"
-    printf 'Refreshing Codex/%s... ' "$name"
-    if refresh_codex_account "$name" "$mode"; then
-      printf 'ok\n'
-      successes=$((successes + 1))
-    else
-      printf 'failed\n'
-      failures=$((failures + 1))
-    fi
-    done=$((done + 1))
-    [[ "$mode" == "background" ]] && write_refresh_status running "$done" "$total" "codex/$name" "$successes" "$failures"
+    job_keys+=("codex:$name")
+    printf 'Refreshing Codex/%s...\n' "$name"
+    (
+      local r='fail'
+      trap 'printf "%s" "$r" >"$result_dir/codex-$name"' EXIT
+      refresh_codex_account "$name" "$mode" && r='ok' || true
+    ) &
+    pids+=("$!")
   done
 
   for file in "$CLAUDE_ACCOUNTS_DIR"/*.json; do
     [[ -e "$file" ]] || continue
-    found=1
     name="$(basename "$file" .json)"
-    [[ "$mode" == "background" ]] && write_refresh_status running "$done" "$total" "claude/$name" "$successes" "$failures"
-    printf 'Refreshing Claude/%s... ' "$name"
-    if refresh_claude_account "$name"; then
-      printf 'ok\n'
-      successes=$((successes + 1))
-    else
-      printf 'failed\n'
-      failures=$((failures + 1))
-    fi
-    done=$((done + 1))
-    [[ "$mode" == "background" ]] && write_refresh_status running "$done" "$total" "claude/$name" "$successes" "$failures"
+    job_keys+=("claude:$name")
+    printf 'Refreshing Claude/%s...\n' "$name"
+    (
+      local r='fail'
+      trap 'printf "%s" "$r" >"$result_dir/claude-$name"' EXIT
+      refresh_claude_account "$name" && r='ok' || true
+    ) &
+    pids+=("$!")
   done
 
-  [[ "$found" -eq 1 ]] || warn "No accounts have been added."
+  local pid
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+
+  local job provider acct result
+  for job in "${job_keys[@]}"; do
+    provider="${job%%:*}"
+    acct="${job##*:}"
+    result="$(cat "$result_dir/$provider-$acct" 2>/dev/null)"
+    if [[ "$result" == "ok" ]]; then
+      printf '%s/%s: ok\n' "$(uppercase "$provider")" "$acct"
+      successes=$((successes + 1))
+    else
+      printf '%s/%s: failed\n' "$(uppercase "$provider")" "$acct"
+      failures=$((failures + 1))
+    fi
+  done
+  rm -rf "$result_dir"
+
+  local done_count=$((successes + failures))
   if [[ "$mode" == "background" ]]; then
     if [[ "$failures" -eq 0 ]]; then
-      write_refresh_status done "$done" "$total" "" "$successes" "$failures"
+      write_refresh_status done "$done_count" "$total" "" "$successes" "$failures"
     else
-      write_refresh_status failed "$done" "$total" "" "$successes" "$failures"
+      write_refresh_status failed "$done_count" "$total" "" "$successes" "$failures"
     fi
   fi
   [[ "$failures" -eq 0 ]]
@@ -1828,7 +1853,7 @@ interactive_remove() {
 }
 
 help_content_en() {
-  cat <<'HELP'
+  cat <<HELP
 AI ACCOUNT CENTER - USER GUIDE
 
 OVERVIEW
@@ -1906,14 +1931,14 @@ aic schedule set 30m
 aic schedule off
 
 FILES
-Source code: /Users/macbookair/Desktop/Miscellaneous/ai-account-center
+Source code: $APP_DIR
 Private data: ~/.ai-account-center
 Live Codex credential: ~/.codex/auth.json
 HELP
 }
 
 help_content_th() {
-  cat <<'HELP'
+  cat <<HELP
 AI ACCOUNT CENTER - คู่มือการใช้งาน
 
 ภาพรวม
@@ -1990,7 +2015,7 @@ aic schedule set 30m
 aic schedule off
 
 ตำแหน่งไฟล์
-Source code: /Users/macbookair/Desktop/Miscellaneous/ai-account-center
+Source code: $APP_DIR
 ข้อมูลส่วนตัว: ~/.ai-account-center
 Credential ที่ Codex ใช้อยู่: ~/.codex/auth.json
 HELP
@@ -2353,6 +2378,7 @@ schedule_status() {
 }
 
 interactive_menu() {
+  local name
   start_background_refresh_for_tui
   while true; do
     reconcile_active_codex
