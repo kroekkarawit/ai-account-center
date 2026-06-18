@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.11.1"
+APP_VERSION="0.11.2"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -16,6 +16,7 @@ CONFIG_FILE="$DATA_DIR/config.json"
 STATE_FILE="$DATA_DIR/state.json"
 CODEX_ACCOUNTS_DIR="$DATA_DIR/accounts/codex"
 CLAUDE_ACCOUNTS_DIR="$DATA_DIR/accounts/claude"
+MODEL_PROFILES_DIR="$DATA_DIR/model-profiles"
 USAGE_DIR="$DATA_DIR/usage"
 BACKUP_DIR="$DATA_DIR/backups"
 RUNTIME_DIR="$DATA_DIR/runtime"
@@ -68,6 +69,7 @@ menu_icon() {
       add-codex) printf '＋' ;;
       add-claude) printf '◈' ;;
       claude-switch) printf '◆' ;;
+      model-launch) printf '◉' ;;
       claude-login) printf '◇' ;;
       claude-import) printf '⇠' ;;
       claude-token) printf '◈' ;;
@@ -90,6 +92,7 @@ menu_icon() {
       add-codex) printf 'C+' ;;
       add-claude) printf 'A+' ;;
       claude-switch) printf 'A>' ;;
+      model-launch) printf 'M>' ;;
       claude-login) printf 'A@' ;;
       claude-import) printf 'A<' ;;
       claude-token) printf 'A#' ;;
@@ -334,11 +337,13 @@ ensure_dirs() {
   mkdir -p \
     "$CODEX_ACCOUNTS_DIR" \
     "$CLAUDE_ACCOUNTS_DIR" \
+    "$MODEL_PROFILES_DIR" \
     "$USAGE_DIR" \
     "$BACKUP_DIR" \
     "$RUNTIME_DIR"
   chmod 700 "$DATA_DIR" "$DATA_DIR/accounts" "$CODEX_ACCOUNTS_DIR" \
-    "$CLAUDE_ACCOUNTS_DIR" "$USAGE_DIR" "$BACKUP_DIR" "$RUNTIME_DIR" 2>/dev/null || true
+    "$CLAUDE_ACCOUNTS_DIR" "$MODEL_PROFILES_DIR" "$USAGE_DIR" "$BACKUP_DIR" \
+    "$RUNTIME_DIR" 2>/dev/null || true
 
   if [[ ! -f "$CONFIG_FILE" ]]; then
     cat >"$CONFIG_FILE.tmp" <<'JSON'
@@ -1113,6 +1118,190 @@ remove_claude() {
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   rm -f "$file" "$(usage_file claude "$name")"
   printf 'Removed Claude account: %s\n' "$name"
+}
+
+# ---------------------------------------------------------------------------
+# Model profiles — launch Claude with a different provider/model backend
+# ---------------------------------------------------------------------------
+
+model_profile_file() { printf '%s/%s.json\n' "$MODEL_PROFILES_DIR" "$1"; }
+
+model_profile_names() {
+  local file
+  for file in "$MODEL_PROFILES_DIR"/*.json; do
+    [[ -e "$file" ]] || continue
+    basename "$file" .json
+  done
+}
+
+_model_preset() {
+  local preset="$1"
+  case "$preset" in
+    deepseek-v4-pro)
+      printf '%s\n' \
+        'display_name=DeepSeek V4 Pro' \
+        'base_url=https://api.deepseek.com/anthropic' \
+        'default_model=deepseek-v4-pro' \
+        'opus_model=deepseek-v4-pro' \
+        'sonnet_model=deepseek-v4-pro' \
+        'haiku_model=deepseek-v4-flash' \
+        'subagent_model=deepseek-v4-flash'
+      ;;
+    deepseek-v3)
+      printf '%s\n' \
+        'display_name=DeepSeek V3' \
+        'base_url=https://api.deepseek.com/anthropic' \
+        'default_model=deepseek-v3' \
+        'opus_model=deepseek-v3' \
+        'sonnet_model=deepseek-v3' \
+        'haiku_model=deepseek-v3' \
+        'subagent_model=deepseek-v3'
+      ;;
+  esac
+}
+
+add_model_profile() {
+  local name="${1:-}"
+  local preset
+  preset="$(choose_from "Select provider" \
+    "DeepSeek V4 Pro  (verified with Claude Code)::deepseek-v4-pro" \
+    "DeepSeek V3::deepseek-v3" \
+    "Custom (enter URL and models manually)::custom" \
+  )" || return 1
+  preset="${preset##*::}"
+
+  if [[ -z "$name" ]]; then
+    printf 'Profile name (e.g. deepseek, my-deepseek): '
+    IFS= read -r name
+    [[ -n "$name" ]] || return 1
+  fi
+  validate_name "$name"
+  local dest
+  dest="$(model_profile_file "$name")"
+  [[ ! -f "$dest" ]] || die "Model profile already exists: $name"
+
+  local display_name base_url default_model opus_model sonnet_model haiku_model subagent_model
+  if [[ "$preset" != "custom" ]]; then
+    local line key val
+    while IFS= read -r line; do
+      key="${line%%=*}"; val="${line#*=}"
+      case "$key" in
+        display_name)  display_name="$val"  ;;
+        base_url)      base_url="$val"      ;;
+        default_model) default_model="$val" ;;
+        opus_model)    opus_model="$val"    ;;
+        sonnet_model)  sonnet_model="$val"  ;;
+        haiku_model)   haiku_model="$val"   ;;
+        subagent_model) subagent_model="$val" ;;
+      esac
+    done < <(_model_preset "$preset")
+  else
+    display_name="$name"
+    printf 'API base URL (e.g. https://api.deepseek.com/anthropic): '
+    IFS= read -r base_url; [[ -n "$base_url" ]] || die "Base URL required."
+    printf 'Default model name: '
+    IFS= read -r default_model; [[ -n "$default_model" ]] || die "Model name required."
+    printf 'Opus model    [%s]: ' "$default_model"; IFS= read -r opus_model
+    printf 'Sonnet model  [%s]: ' "$default_model"; IFS= read -r sonnet_model
+    printf 'Haiku model   [%s]: ' "$default_model"; IFS= read -r haiku_model
+    printf 'Subagent model[%s]: ' "${haiku_model:-$default_model}"; IFS= read -r subagent_model
+    [[ -n "$opus_model" ]]    || opus_model="$default_model"
+    [[ -n "$sonnet_model" ]]  || sonnet_model="$default_model"
+    [[ -n "$haiku_model" ]]   || haiku_model="$default_model"
+    [[ -n "$subagent_model" ]] || subagent_model="$haiku_model"
+  fi
+
+  printf 'API key for %s (hidden): ' "$display_name" >&2
+  local api_key=""
+  IFS= read -r -s api_key; printf '\n' >&2
+  [[ -n "$api_key" ]] || die "API key cannot be empty."
+
+  jq -n \
+    --arg name "$name" \
+    --arg display_name "$display_name" \
+    --arg base_url "$base_url" \
+    --arg api_key "$api_key" \
+    --arg default_model "$default_model" \
+    --arg opus_model "$opus_model" \
+    --arg sonnet_model "$sonnet_model" \
+    --arg haiku_model "$haiku_model" \
+    --arg subagent_model "$subagent_model" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{name:$name,display_name:$display_name,base_url:$base_url,api_key:$api_key,
+      default_model:$default_model,opus_model:$opus_model,sonnet_model:$sonnet_model,
+      haiku_model:$haiku_model,subagent_model:$subagent_model,created_at:$ts}' \
+    >"$dest.tmp" || die "Could not save model profile."
+  chmod 600 "$dest.tmp"
+  mv -f "$dest.tmp" "$dest"
+  printf 'Saved model profile: %s (%s)\n' "$name" "$display_name"
+}
+
+remove_model_profile() {
+  local name="$1"
+  validate_name "$name"
+  local file
+  file="$(model_profile_file "$name")"
+  [[ -f "$file" ]] || die "Unknown model profile: $name"
+  rm -f "$file"
+  printf 'Removed model profile: %s\n' "$name"
+}
+
+launch_with_profile() {
+  local name="$1"; shift
+  local file
+  file="$(model_profile_file "$name")"
+  [[ -f "$file" ]] || die "Unknown model profile: $name"
+  require_command claude
+
+  local base_url api_key default_model opus_model sonnet_model haiku_model subagent_model display_name
+  base_url="$(jq -r      '.base_url      // empty' "$file")"
+  api_key="$(jq -r       '.api_key       // empty' "$file")"
+  default_model="$(jq -r '.default_model // empty' "$file")"
+  opus_model="$(jq -r    '.opus_model    // empty' "$file")"
+  sonnet_model="$(jq -r  '.sonnet_model  // empty' "$file")"
+  haiku_model="$(jq -r   '.haiku_model   // empty' "$file")"
+  subagent_model="$(jq -r '.subagent_model // empty' "$file")"
+  display_name="$(jq -r  '.display_name // .name' "$file")"
+
+  local envs=()
+  [[ -n "$base_url"      ]] && envs+=("ANTHROPIC_BASE_URL=$base_url")
+  [[ -n "$api_key"       ]] && envs+=("ANTHROPIC_AUTH_TOKEN=$api_key")
+  [[ -n "$default_model" ]] && envs+=("ANTHROPIC_MODEL=$default_model")
+  [[ -n "$opus_model"    ]] && envs+=("ANTHROPIC_DEFAULT_OPUS_MODEL=$opus_model")
+  [[ -n "$sonnet_model"  ]] && envs+=("ANTHROPIC_DEFAULT_SONNET_MODEL=$sonnet_model")
+  [[ -n "$haiku_model"   ]] && envs+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$haiku_model")
+  [[ -n "$subagent_model" ]] && envs+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
+
+  printf '%sLaunching Claude  ·  profile: %s  ·  %s%s\n' \
+    "$CYAN" "$display_name" "${base_url#https://}" "$RESET"
+  exec env "${envs[@]}" claude "$@"
+}
+
+interactive_model_launch() {
+  local options=() name display base file item
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    file="$(model_profile_file "$name")"
+    display="$(jq -r '.display_name // .name' "$file" 2>/dev/null)"
+    base="$(jq -r '.base_url // ""' "$file" 2>/dev/null)"
+    base="${base#https://}"; base="${base%%/*}"
+    options+=("$name  —  $display  ($base)::$name")
+  done < <(model_profile_names)
+
+  if [[ "${#options[@]}" -eq 0 ]]; then
+    warn "No model profiles saved."
+    local ans
+    ans="$(choose_from "Add a profile now?" \
+      "Yes, add a profile" "No, cancel")" || return 0
+    [[ "$ans" == "Yes"* ]] && add_model_profile
+    return 0
+  fi
+
+  options+=("+ Add new profile::__add__")
+  item="$(choose_from "Select model profile" "${options[@]}")" || return 1
+  local key="${item##*::}"
+  [[ "$key" == "__add__" ]] && { add_model_profile; return; }
+  launch_with_profile "$key"
 }
 
 rename_codex_account() {
@@ -2121,7 +2310,9 @@ choose_from() {
   }
 
   local show_numbers=0
-  ((${#options[@]} <= 9)) && show_numbers=1
+  ((${#options[@]} >= 2)) && show_numbers=1
+  local max_shortcut=9
+  ((${#options[@]} < max_shortcut)) && max_shortcut="${#options[@]}"
 
   local rendered=0
   while true; do
@@ -2129,15 +2320,15 @@ choose_from() {
       printf '%s%s%s\n' "$BOLD" "$prompt" "$RESET" >&2
       if ((show_numbers)); then
         printf '%s  Up/Down or j/k, Enter to confirm, 1-%d to jump+confirm, Esc/q cancel%s\n' \
-          "$DIM" "${#options[@]}" "$RESET" >&2
+          "$DIM" "$max_shortcut" "$RESET" >&2
       else
         printf '%s  Use Up/Down or j/k, Enter to select, Esc/q to cancel%s\n' "$DIM" "$RESET" >&2
       fi
       for ((i = 0; i < ${#options[@]}; i++)); do
         local label
         label="$(option_label "${options[$i]}")"
-        local num_prefix="  "
-        ((show_numbers)) && num_prefix="$((i+1)) "
+        local num_prefix
+        ((show_numbers && i < 9)) && num_prefix="$((i+1)) " || num_prefix="   "
         if ((i == selected)); then
           printf ' %s%s%s> %-44s%s\n' "$DIM" "$num_prefix" "$RESET$CYAN$REVERSE" "$label" "$RESET" >&2
         else
@@ -2190,7 +2381,7 @@ choose_from() {
         return 1
         ;;
       [1-9])
-        if ((show_numbers && key <= ${#options[@]})); then
+        if ((show_numbers && key <= ${#options[@]} && key <= 9)); then
           exec 3<&-
           printf '%s\n' "${options[$((key - 1))]}"
           return 0
@@ -2901,6 +3092,7 @@ interactive_menu() {
       AIC_REDRAW_ON_REFRESH_DONE=1 choose_from "Action" \
         "$(menu_item codex-switch "Switch account →" switch-account)" \
         "$(menu_item codex-open "$open_label" codex-open)" \
+        "$(menu_item model-launch "Open Claude with model →" model-launch)" \
         "$(menu_item add-codex "Add Codex account →" add-codex)" \
         "$(menu_item add-claude "Add Claude account →" add-claude)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
@@ -2926,6 +3118,7 @@ interactive_menu() {
         esac
         ;;
       codex-open) exec codex ;;
+      model-launch) interactive_model_launch ;;
       add-codex)
         local sub
         sub="$(choose_from "Add Codex account" \
@@ -3017,6 +3210,12 @@ Claude accounts:
   aic claude remove NAME
   aic claude setup-token           Inference-only; cannot read usage endpoint
 
+Model profiles (launch Claude with a different provider/model):
+  aic model add [NAME]             Add a profile (DeepSeek preset or custom)
+  aic model run NAME [-- ARGS]     Launch Claude using this profile
+  aic model remove NAME
+  aic model list
+
 Schedule:
   aic schedule set 15m|30m|1h|2h
   aic schedule off
@@ -3100,6 +3299,28 @@ main() {
         rename) [[ -n "${1:-}" && -n "${2:-}" ]] || die "Usage: aic claude rename OLD NEW"; rename_claude_account "$1" "$2" ;;
         setup-token) exec claude setup-token ;;
         *) die "Use: aic claude login|import|add|use|remove|rename|setup-token" ;;
+      esac
+      ;;
+    model)
+      local sub="${1:-}"
+      shift || true
+      case "$sub" in
+        add)    add_model_profile "${1:-}" ;;
+        run)
+          [[ -n "${1:-}" ]] || die "Profile name required."
+          local profile="$1"; shift
+          [[ "${1:-}" == "--" ]] && shift
+          launch_with_profile "$profile" "$@"
+          ;;
+        remove) [[ -n "${1:-}" ]] || die "Profile name required."; remove_model_profile "$1" ;;
+        list)
+          local n; while IFS= read -r n; do
+            [[ -n "$n" ]] || continue
+            printf '%s  (%s)\n' "$n" \
+              "$(jq -r '.display_name // .name' "$(model_profile_file "$n")" 2>/dev/null)"
+          done < <(model_profile_names)
+          ;;
+        *) die "Use: aic model add|run|remove|list" ;;
       esac
       ;;
     schedule)

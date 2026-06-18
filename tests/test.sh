@@ -373,6 +373,51 @@ unset CLAUDE_CRED_FILE
 "$ROOT/bin/aic" claude remove personal >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/personal.json"
 
+# Model profile tests — create profile directly (bypass interactive wizard)
+profile_file="$AIC_DATA_DIR/model-profiles/test-deepseek.json"
+jq -n '{
+  name:"test-deepseek",
+  display_name:"DeepSeek V4 Pro",
+  base_url:"https://api.deepseek.com/anthropic",
+  api_key:"sk-test-deepseek-key",
+  default_model:"deepseek-v4-pro",
+  opus_model:"deepseek-v4-pro",
+  sonnet_model:"deepseek-v4-pro",
+  haiku_model:"deepseek-v4-flash",
+  subagent_model:"deepseek-v4-flash",
+  created_at:"2026-01-01T00:00:00Z"
+}' >"$profile_file"
+chmod 600 "$profile_file"
+
+# list
+output="$("$ROOT/bin/aic" model list)"
+assert_contains "$output" "test-deepseek"
+assert_contains "$output" "DeepSeek V4 Pro"
+
+# launch_with_profile: mock claude binary prints the env it receives
+cat >"$TMP/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-}"
+printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
+printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}"
+printf 'ANTHROPIC_DEFAULT_OPUS_MODEL=%s\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}"
+printf 'ANTHROPIC_DEFAULT_HAIKU_MODEL=%s\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
+printf 'CLAUDE_CODE_SUBAGENT_MODEL=%s\n' "${CLAUDE_CODE_SUBAGENT_MODEL:-}"
+SH
+chmod +x "$TMP/bin/claude"
+
+output="$("$ROOT/bin/aic" model run test-deepseek 2>/dev/null)"
+assert_contains "$output" "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic"
+assert_contains "$output" "ANTHROPIC_AUTH_TOKEN=sk-test-deepseek-key"
+assert_contains "$output" "ANTHROPIC_MODEL=deepseek-v4-pro"
+assert_contains "$output" "ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro"
+assert_contains "$output" "ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash"
+assert_contains "$output" "CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash"
+
+# remove
+"$ROOT/bin/aic" model remove test-deepseek >/dev/null
+test ! -f "$profile_file"
+
 "$ROOT/bin/aic" schedule off >/dev/null
 test "$(jq -r '.schedule.enabled' "$AIC_DATA_DIR/config.json")" = "false"
 
