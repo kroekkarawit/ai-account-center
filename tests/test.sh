@@ -292,7 +292,8 @@ AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/d
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
 test -L "$install_bin/aic"
-test "$("$install_bin/aic" version)" = "0.10.3"
+expected_version="$("$ROOT/bin/aic" version)"
+test "$("$install_bin/aic" version)" = "$expected_version"
 
 uninstall_data="$TMP/uninstall-data"
 mkdir -p "$uninstall_data"

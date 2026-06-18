@@ -6,7 +6,7 @@ set -o pipefail
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.10.3"
+APP_VERSION="0.10.4"
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"
@@ -501,6 +501,34 @@ codex_email() {
   jq -r '.email // .["https://api.openai.com/profile"].email // empty' <<<"$decoded" 2>/dev/null
 }
 
+access_token_exp() {
+  local file="$1" payload decoded
+  payload="$(
+    jq -r '.tokens.access_token // empty' "$file" |
+      awk -F. 'NF >= 2 { print $2 }' |
+      tr '_-' '/+' |
+      awk '{
+        rem = length($0) % 4
+        if (rem == 2) print $0 "=="
+        else if (rem == 3) print $0 "="
+        else print $0
+      }'
+  )"
+  [[ -n "$payload" ]] || return 0
+  decoded="$(printf '%s' "$payload" | base64 --decode 2>/dev/null)" ||
+    decoded="$(printf '%s' "$payload" | base64 -D 2>/dev/null)" ||
+    return 0
+  jq -r '.exp // empty' <<<"$decoded" 2>/dev/null
+}
+
+is_access_token_expired() {
+  local file="$1" exp now
+  exp="$(access_token_exp "$file")"
+  [[ -n "$exp" && "$exp" =~ ^[0-9]+$ ]] || return 1
+  now="$(date +%s)"
+  ((now >= exp))
+}
+
 save_live_codex_as() {
   local name="$1"
   validate_name "$name"
@@ -812,6 +840,15 @@ switch_codex_impl() {
   [[ -f "$source" ]] || die "Unknown Codex account: $name"
   validate_codex_auth "$source" || die "Stored auth for '$name' is invalid."
   warn_running_codex_for_switch "$process_mode" || return 1
+
+  if is_access_token_expired "$source"; then
+    printf '%sAccess token for %s is expired — refreshing before switch...%s\n' "$YELLOW" "$name" "$RESET"
+    if refresh_codex_account "$name" 2>/dev/null; then
+      source="$(codex_account_file "$name")"
+    else
+      warn "Token refresh failed. Switching with expired token — Codex may require re-login."
+    fi
+  fi
 
   sync_active_codex
   backup_live_auth
