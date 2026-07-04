@@ -1,7 +1,11 @@
 # AI Account Center
 
-A small Bash TUI for switching Codex subscription accounts and monitoring Codex
-and Claude subscription limits from one place.
+A small Bash TUI for switching Codex and Claude subscription accounts, launching
+either CLI against an alternate model provider, and monitoring Codex and Claude
+subscription limits — all from one interactive menu.
+
+Everything is driven from the menu. There is no long list of subcommands to
+remember: run `aic` and pick what you want to do.
 
 ## Requirements
 
@@ -9,7 +13,7 @@ and Claude subscription limits from one place.
 - `jq`
 - Codex CLI
 - `curl`
-- Claude CLI, only for creating Claude subscription tokens
+- Claude CLI (only for Claude subscription login / setup-token)
 - A terminal with ANSI color and arrow-key support
 
 ## Install
@@ -29,35 +33,40 @@ curl -fsSL \
   https://raw.githubusercontent.com/kroekkarawit/ai-account-center/main/install.sh | bash
 ```
 
-Update later:
+The installer copies app files to `~/.local/share/ai-account-center` (the `aic`
+launcher plus its `lib/aic` modules) and links `~/.local/bin/aic`. Account data
+lives in `~/.ai-account-center`, so updates never overwrite stored tokens or
+cached usage.
+
+For local development, symlink the checkout instead of copying:
 
 ```bash
-aic update
-```
-
-Uninstall the app while keeping stored accounts and usage data:
-
-```bash
-aic uninstall
-```
-
-Remove everything, including stored account tokens:
-
-```bash
-aic uninstall --purge-data
-```
-
-The installer copies app files to `~/.local/share/ai-account-center` and links
-`~/.local/bin/aic`. Account data remains in `~/.ai-account-center`, so updates
-do not overwrite stored tokens or cached usage.
-
-For local development:
-
-```bash
-cd "/Users/macbookair/Desktop/Miscellaneous/ai-account-center"
+cd /path/to/ai-account-center
 chmod +x bin/aic install.sh
 ./install.sh --dev
 ```
+
+## Commands
+
+The interactive menu is the interface. Only a handful of non-interactive
+commands exist, for scripting and the background scheduler:
+
+```bash
+aic                          # open the interactive menu (does everything)
+aic refresh                  # refresh cached usage for all accounts
+aic refresh codex NAME       # refresh a single account
+aic refresh claude NAME
+aic status                   # print cached usage for all accounts
+aic update [REF]             # update from GitHub
+aic uninstall                # remove the install, keep account data
+aic uninstall --purge-data   # also delete ~/.ai-account-center (tokens included)
+aic version
+```
+
+Switching, adding accounts, model launches, scheduling, renaming, removing, and
+diagnostics all live inside the menu.
+
+## Using the menu
 
 Run:
 
@@ -65,136 +74,114 @@ Run:
 aic
 ```
 
-The built-in TUI uses `Up`/`Down` or `j`/`k` to move, `Enter` to select, and
-`Esc` or `q` to cancel. No TUI dependency such as `fzf` is required.
-The main menu uses terminal-native Unicode symbols such as `◆`, `◇`, `↻`,
-and `⏱` when a UTF-8 locale is available, with ASCII fallback otherwise.
+Navigate with `Up`/`Down` or `j`/`k`, press number keys `1`–`9` to jump, `Enter`
+to select, and `Esc` or `q` to cancel. No TUI dependency such as `fzf` is
+required. The menu uses Unicode symbols (`◆`, `◇`, `↻`, `⏱`) when a UTF-8 locale
+is available, with an ASCII fallback otherwise.
 
-The `Help / คู่มือ` menu contains a scrollable user guide in English and Thai.
-Use `Up`/`Down`, `PageUp`/`PageDown`, `Home`/`End`, and `Esc` or `q`.
-
-Reset times are displayed in `Asia/Bangkok` by default. The timezone can be
-changed in `~/.ai-account-center/config.json` under `display.timezone`.
-
-The app stores private data under `~/.ai-account-center` with restrictive file
-permissions. It does not duplicate Codex plugins, skills, configuration, or
-session history.
-
-## Add Codex accounts
-
-Login a new Codex account from the same computer:
-
-```bash
-aic codex login personal
-```
-
-This runs `codex login` with a temporary `CODEX_HOME`, saves the resulting
-`auth.json` into AI Account Center, and leaves your active `~/.codex/auth.json`
-unchanged until you explicitly switch.
-
-On a remote/headless machine:
-
-```bash
-aic codex login personal --device-auth
-```
-
-Save the account currently logged into Codex:
-
-```bash
-aic codex add personal
-```
-
-Import auth from another computer:
-
-```bash
-aic codex import company ~/Downloads/company-auth.json
-```
-
-In the TUI, `⇢ Import another Codex auth.json` accepts pasted multi-line JSON
-and starts the import automatically when the JSON object is complete. It reads
-in raw character mode so long JWT/token lines can be pasted. Cancel with
-`Ctrl-C`, `Ctrl-D`, `q`, `:q`, `quit`, or `exit`; clear the current paste with
-`Ctrl-U`. For very large auth files, importing by path is still the most
-reliable option.
-
-Switch or run:
-
-```bash
-aic codex use personal
-aic codex run company
-aic codex run personal -- exec "Review this repository"
-aic codex remove company
-```
-
-Account switching only replaces `~/.codex/auth.json`. Before switching, the
-current file is synchronized back to its stored account so refreshed tokens are
-not lost. A timestamped backup is also created.
-
-Do not switch while another Codex CLI process is running. AI Account Center does
-not call `codex logout`; account switching only swaps the live auth file after
-you confirm process cleanup.
-
-## Add Claude
-
-For limit monitoring, login with full Claude subscription OAuth:
-
-```bash
-aic claude login personal
-```
-
-If Claude is already logged in normally:
-
-```bash
-aic claude import personal
-```
-
-`claude setup-token` creates an inference-only token. It cannot call Claude's
-usage endpoint, so AI Account Center falls back to a one-output-token Haiku
-request and reads the 5-hour and 7-day utilization from the response headers.
-
-A token can still be added manually with hidden input:
-
-```bash
-aic claude add personal
-aic claude remove personal
-```
-
-## Monitor limits
-
-```bash
-aic refresh
-aic status
-```
-
-Codex monitoring calls the CLI app-server's `account/rateLimits/read` method for
-each stored account. It does not send an inference prompt or consume model
-tokens. Claude monitoring first calls the usage endpoint used by Claude Code.
-For inference-only tokens it sends a one-output-token Haiku request and reads
-the rate-limit response headers. These provider details are implementation-
-dependent and may require updates when either CLI changes.
-
-## Schedule
-
-Fixed intervals are supported:
-
-```bash
-aic schedule set 15m
-aic schedule set 30m
-aic schedule set 1h
-aic schedule set 2h
-aic schedule off
-aic schedule status
-```
-
-On macOS this installs a user `launchd` agent. On Linux with systemd it installs
-a user timer. No terminal needs to remain open, but the machine must be awake
-and online.
-
-Configuration is stored at:
+The dashboard at the top shows each stored account with a usage badge:
 
 ```text
-~/.ai-account-center/config.json
+[5h ██░░░░░░░░  22% -> 18:49]
+[7d █████████░  94% -> Jun 16, 16:50]
 ```
+
+The percentage is usage **consumed**, not remaining. Green is low, yellow is
+≥70% used, red is ≥90% used. Reset times use `Asia/Bangkok` unless changed in
+Settings.
+
+### Switch account
+
+**Switch account → Codex account / Claude account.** For Codex, the live
+`~/.codex/auth.json` is replaced atomically; the previous file is synced back to
+its stored account first (so refreshed tokens are not lost) and a timestamped
+backup is written. Do not switch while another Codex CLI process is running —
+the menu warns you and offers to close running sessions.
+
+### Add a Codex account
+
+**Add Codex account →**
+
+- **Login with browser** — runs `codex login` in a temporary `CODEX_HOME` and
+  saves the result, leaving your active `~/.codex/auth.json` untouched.
+- **Save current session** — stores the account currently in `~/.codex/auth.json`.
+- **Import from file or paste** — paste multi-line JSON, type/drag a file path,
+  or press `P` to import from the clipboard. Pasting reads in raw character mode
+  so long JWT/token lines survive; clear with `Ctrl-U`, cancel with `Ctrl-C`,
+  `Ctrl-D`, or `q`. For very large auth files, importing by path is most
+  reliable.
+
+### Add a Claude account
+
+**Add Claude account →**
+
+- **Login with OAuth** — full Claude subscription OAuth (needed for usage
+  monitoring), imported automatically.
+- **Import current login** — imports an existing Claude Code login.
+- **Add token manually** — stores a `setup-token` or OAuth token with hidden
+  input. A `setup-token` is inference-only; see Monitoring below.
+
+### Launch with a model profile
+
+**Open Codex with model / Open Claude with model** launch the respective CLI
+against an alternate provider/model (for example DeepSeek). From the same
+picker you can **+ Add new profile** or **Manage profiles** (remove). Profiles
+store a base URL, API key, and per-tier model names, and are applied via
+environment variables at launch.
+
+### Manage accounts
+
+**Manage accounts** picks a single account and offers: switch, refresh, rename,
+re-login, re-import (Codex), update token (Claude), and remove. Removing an
+active Codex profile does **not** delete the live `~/.codex/auth.json` and does
+not log the account out — it only removes Account Center's saved copy.
+
+### Settings
+
+**Settings** edits `~/.ai-account-center/config.json`: display timezone, the
+Codex/Claude monitor toggles and timeouts, the Claude probe model, and the
+background refresh schedule.
+
+## Monitoring
+
+**Refresh all usage** (or `aic refresh`) updates every stored account:
+
+- **Codex** — calls the CLI app-server's `account/rateLimits/read` method. No
+  inference prompt is sent and no model tokens are consumed.
+- **Claude (full OAuth)** — calls the usage endpoint used by Claude Code.
+- **Claude (inference-only setup-token)** — sends a one-output-token Haiku
+  request and reads 5-hour / 7-day utilization from the response headers.
+
+These provider details are implementation-dependent and may need updates when
+either CLI changes.
+
+## Background schedule
+
+In **Settings**, set a refresh interval (15m, 30m, 1h, 2h, 4h, 6h) or turn it
+off. On macOS this installs a user `launchd` agent; on Linux with systemd it
+installs a user timer (both run `aic refresh --scheduled`). No terminal needs to
+stay open, but the machine must be awake and online when the refresh runs.
+
+## Diagnostics
+
+If Codex auth or rate-limit checks fail, open **Help → Diagnostics**. It prints:
+
+- OS, shell, and every directory in `PATH`
+- `codex`, `node`, and `jq` paths and versions (or `NOT FOUND`)
+- location of the rate-limit helper script
+- live `~/.codex/auth.json` inspection: `auth_mode`, field names, `account_id`,
+  and whether the access token is valid or expired (token values are never shown)
+- per stored account: the same auth inspection plus a live 20-second run of the
+  rate-limit helper with full `stdout`/`stderr`
+
+| Symptom | Likely cause |
+|---------|--------------|
+| `codex: NOT FOUND` | Codex CLI not in `$PATH` (`~/.local/bin` may be missing) |
+| `node: NOT FOUND` | Node.js not installed or not in `$PATH` |
+| `access_token: EXPIRED` | Token expired; re-login the account from the menu |
+| `Stdout: (empty)` | Codex version does not support `app-server --stdio` |
+| Stderr shows network error | Proxy or firewall blocking the OpenAI auth endpoint |
+| `validate: FAILED` | Auth file missing required fields; re-import it |
 
 ## Data layout
 
@@ -203,6 +190,7 @@ Configuration is stored at:
 ├── accounts/
 │   ├── codex/
 │   └── claude/
+├── model-profiles/
 ├── backups/
 ├── runtime/
 ├── usage/
@@ -210,10 +198,37 @@ Configuration is stored at:
 └── state.json
 ```
 
+## Project layout
+
+The launcher is a thin entrypoint; all logic lives in focused modules that it
+sources at startup (and that the test suite unit-tests directly):
+
+```text
+bin/aic                 # entrypoint: locate modules, dispatch the 4 commands
+lib/aic/_load.sh        # sources the modules below (core first)
+lib/aic/core.sh         # globals, colors, state, path/time helpers
+lib/aic/codex.sh        # Codex accounts, JWT/auth parsing, switch
+lib/aic/codex-import.sh # paste/file/clipboard auth import
+lib/aic/codex-process.sh# running-Codex detection & force-close on switch
+lib/aic/claude.sh       # Claude accounts, keychain, switch
+lib/aic/model.sh        # model profiles + launch
+lib/aic/usage.sh        # refresh, rate-limit parsing, scoring
+lib/aic/ui.sh           # TUI primitives, dashboard, menus, help, settings
+lib/aic/schedule.sh     # scheduled refresh (launchd/systemd)
+lib/aic/lifecycle.sh    # self update/uninstall + diagnostics
+lib/codex-rate-limits.mjs
+```
+
+Run the tests with:
+
+```bash
+bash tests/test.sh
+```
+
 ## Security notes
 
 - Account and token files use mode `0600`.
 - The data directory uses mode `0700`.
-- Tokens are stored locally in files, not in macOS Keychain.
+- Tokens are stored locally in files, not in the macOS Keychain.
 - Never commit `~/.ai-account-center` or its contents.
 - Removing the data directory removes stored copies but does not revoke tokens.

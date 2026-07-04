@@ -38,6 +38,18 @@ JSON
 
 chmod +x "$ROOT/bin/aic"
 
+# ---------------------------------------------------------------------------
+# The one-line verbs (codex/claude/model/schedule/...) were removed from the
+# CLI; the interactive TUI is now the only human interface. Tests therefore
+# exercise the library functions directly by sourcing the modules, and keep a
+# thin integration layer for the surviving commands (refresh/status/--help/
+# version/uninstall + the no-arg TUI + install.sh).
+# ---------------------------------------------------------------------------
+export AIC_SELF="$ROOT/bin/aic"   # so resolve_self() locates the repo, not a lib file
+# shellcheck source=/dev/null
+source "$ROOT/lib/aic/_load.sh"
+ensure_dirs
+
 assert_contains() {
   local output="$1" expected="$2"
   case "$output" in
@@ -46,7 +58,14 @@ assert_contains() {
   esac
 }
 
-"$ROOT/bin/aic" codex add personal >/dev/null
+jwt_payload() {
+  jq -cn --arg email "$1" --arg sub "$2" '{email: $email, sub: $sub}' |
+    base64 |
+    tr -d '\n=' |
+    tr '+/' '-_'
+}
+
+save_live_codex_as personal >/dev/null
 test -f "$AIC_DATA_DIR/accounts/codex/personal.json"
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
@@ -55,36 +74,130 @@ jq '.tokens.account_id = "account-company" |
     .tokens.refresh_token = "refresh-company"' \
   "$AIC_CODEX_HOME/auth.json" >"$AIC_CODEX_HOME/auth.json.tmp"
 mv "$AIC_CODEX_HOME/auth.json.tmp" "$AIC_CODEX_HOME/auth.json"
-"$ROOT/bin/aic" codex add company >/dev/null
+save_live_codex_as company >/dev/null
+
+jq --arg id_token "header.$(jwt_payload other@example.com google-oauth2-other).signature" \
+  '.tokens.account_id = "account-company" |
+   .tokens.id_token = $id_token |
+   .tokens.access_token = "access-same-account-other-user" |
+   .tokens.refresh_token = "refresh-same-account-other-user"' \
+  "$AIC_CODEX_HOME/auth.json" >"$TMP/same-account-other-user.json"
+import_codex_auth_json sameaccountother "$TMP/same-account-other-user.json" >/dev/null
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/sameaccountother.json")" = "account-company"
+test "$(jq -r '.tokens.id_token' "$AIC_DATA_DIR/accounts/codex/sameaccountother.json")" = "header.$(jwt_payload other@example.com google-oauth2-other).signature"
+
+if output="$(import_codex_auth_json sameaccountduplicate "$TMP/same-account-other-user.json" 2>&1)"; then
+  printf 'Expected same Codex login duplicate to fail\n' >&2
+  exit 1
+fi
+assert_contains "$output" "This Codex login is already stored as 'sameaccountother'."
+test ! -f "$AIC_DATA_DIR/accounts/codex/sameaccountduplicate.json"
 
 jq '.tokens.account_id = "account-imported" |
     .tokens.access_token = "access-imported" |
     .tokens.refresh_token = "refresh-imported"' \
   "$AIC_CODEX_HOME/auth.json" >"$TMP/imported-auth.json"
-"$ROOT/bin/aic" codex import imported "$TMP/imported-auth.json" >/dev/null
+import_codex_auth_json imported "$TMP/imported-auth.json" >/dev/null
 test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/imported.json")" = "account-imported"
+
+jq '.tokens.account_id = "account-path-input" |
+    .tokens.access_token = "access-path-input" |
+    .tokens.refresh_token = "refresh-path-input"' \
+  "$AIC_CODEX_HOME/auth.json" >"$TMP/path-auth.json"
+printf '%s\n' "$TMP/path-auth.json" | import_codex_auth_json pathinput >/dev/null
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/pathinput.json")" = "account-path-input"
+
+mkdir -p "$HOME/Desktop"
+jq '.tokens.account_id = "account-tilde-path" |
+    .tokens.access_token = "access-tilde-path" |
+    .tokens.refresh_token = "refresh-tilde-path"' \
+  "$AIC_CODEX_HOME/auth.json" >"$HOME/Desktop/tilde-auth.json"
+printf '%s\n' '~/Desktop/tilde-auth.json' | import_codex_auth_json tildepath >/dev/null
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/tildepath.json")" = "account-tilde-path"
 
 jq '.tokens.account_id = "account-pasted" |
     .tokens.access_token = "access-pasted" |
     .tokens.refresh_token = "refresh-pasted"' \
-  "$AIC_CODEX_HOME/auth.json" | "$ROOT/bin/aic" codex import pasted >/dev/null
+  "$AIC_CODEX_HOME/auth.json" | import_codex_auth_json pasted >/dev/null
 test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/pasted.json")" = "account-pasted"
+
+jq '.tokens.account_id = "account-clipboard" |
+    .tokens.access_token = "access-clipboard" |
+    .tokens.refresh_token = "refresh-clipboard"' \
+  "$AIC_CODEX_HOME/auth.json" >"$TMP/clipboard-auth.json"
+cat >"$TMP/bin/pbpaste" <<SH
+#!/usr/bin/env bash
+cat "$TMP/clipboard-auth.json"
+SH
+chmod +x "$TMP/bin/pbpaste"
+printf 'p' | import_codex_auth_json clipboard >/dev/null
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/clipboard.json")" = "account-clipboard"
+
+cat >"$TMP/clipboard-auth.json" <<'JSON'
+{
+  "auth_mode": "chatgpt",
+  "OPENAI_API_KEY": null,
+  "tokens": {
+    "id_token": "header.eyJlbWFpbCI6ImNsaXBib2FyZC1yZXBhaXJAZXhhbXBsZS5jb20ifQ.signature",
+    "access_token": "access-
+clipboard-
+repair",
+    "refresh_token": "refresh-
+clipboard-
+repair",
+    "account_id": "account-clipboard-repair"
+  },
+  "last_refresh": "2026-06-15T00:00:00Z"
+}
+JSON
+repair_output="$(printf 'p' | import_codex_auth_json clipboardrepair 2>&1 >/dev/null)"
+assert_contains "$repair_output" "Repaired clipboard JSON by removing raw control characters inside quoted strings."
+test "$(jq -r '.tokens.access_token' "$AIC_DATA_DIR/accounts/codex/clipboardrepair.json")" = "access-clipboard-repair"
+test "$(jq -r '.tokens.refresh_token' "$AIC_DATA_DIR/accounts/codex/clipboardrepair.json")" = "refresh-clipboard-repair"
+
+cat >"$TMP/clipboard-auth.json" <<'JSON'
+{
+  "tokens": {
+    "access_token": "secret-access-token
+JSON
+if output="$(printf 'p' | import_codex_auth_json badclipboard 2>&1)"; then
+  printf 'Expected bad clipboard JSON to fail\n' >&2
+  exit 1
+fi
+assert_contains "$output" "JSON parse failed (clipboard)."
+assert_contains "$output" "jq error:"
+assert_contains "$output" "Raw clipboard saved for local inspection:"
+assert_contains "$output" "Diagnosis: token lines are missing closing quotes."
+assert_contains "$output" "\"access_token\": \"[redacted]"
+test -f "$AIC_DATA_DIR/runtime/last-invalid-codex-clipboard.txt"
+assert_contains "$(cat "$AIC_DATA_DIR/runtime/last-invalid-codex-clipboard.txt")" "secret-access-token"
+test ! -f "$AIC_DATA_DIR/accounts/codex/badclipboard.json"
+
+{
+  printf '\033[200~'
+  jq '.tokens.account_id = "account-bracketed-paste" |
+      .tokens.access_token = "access-bracketed-paste" |
+      .tokens.refresh_token = "refresh-bracketed-paste"' \
+    "$AIC_CODEX_HOME/auth.json"
+  printf '\033[201~'
+} | import_codex_auth_json bracketedpaste >/dev/null
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/bracketedpaste.json")" = "account-bracketed-paste"
 
 long_token="$(printf 'x%.0s' $(seq 1 20000))"
 jq -c --arg token "$long_token" \
   '.tokens.account_id = "account-long-paste" |
    .tokens.access_token = $token |
    .tokens.refresh_token = $token' \
-  "$AIC_CODEX_HOME/auth.json" | "$ROOT/bin/aic" codex import longpaste >/dev/null
+  "$AIC_CODEX_HOME/auth.json" | import_codex_auth_json longpaste >/dev/null
 test "$(jq -r '.tokens.access_token | length' "$AIC_DATA_DIR/accounts/codex/longpaste.json")" = "20000"
 
-if printf 'q\n' | "$ROOT/bin/aic" codex import cancelled >/dev/null 2>&1; then
+if printf 'q\n' | import_codex_auth_json cancelled >/dev/null 2>&1; then
   printf 'Expected paste import cancellation to return non-zero\n' >&2
   exit 1
 fi
 test ! -f "$AIC_DATA_DIR/accounts/codex/cancelled.json"
 
-if printf '{\n' | "$ROOT/bin/aic" codex import incomplete >/dev/null 2>&1; then
+if printf '{\n' | import_codex_auth_json incomplete >/dev/null 2>&1; then
   printf 'Expected incomplete paste import to return non-zero\n' >&2
   exit 1
 fi
@@ -115,13 +228,13 @@ exit 1
 SH
 chmod +x "$TMP/bin/codex"
 
-"$ROOT/bin/aic" codex login browser --device-auth >/dev/null
+login_codex_browser browser --device-auth >/dev/null
 test -f "$AIC_DATA_DIR/accounts/codex/browser.json"
 test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/browser.json")" = "account-browser"
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "company"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 
-"$ROOT/bin/aic" codex use personal >/dev/null
+switch_codex_impl personal >/dev/null
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-personal"
 
 cat >"$TMP/bin/pgrep" <<'SH'
@@ -143,7 +256,8 @@ OUT
 SH
 chmod +x "$TMP/bin/ps"
 kill_log="$TMP/kill.log"
-output="$(AIC_TEST_KILL_LOG="$kill_log" AIC_TEST_STILL_ALIVE_PIDS="101" AIC_KILL_GRACE_SECONDS=0 "$ROOT/bin/aic" codex use company 2>&1)"
+output="$(AIC_TEST_KILL_LOG="$kill_log" AIC_TEST_STILL_ALIVE_PIDS="101" AIC_KILL_GRACE_SECONDS=0 \
+  switch_codex_impl company 2>&1)"
 assert_contains "$output" "Codex CLI is currently running"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 grep -q '^TERM 102$' "$kill_log"
@@ -151,7 +265,7 @@ grep -q '^TERM 101$' "$kill_log"
 grep -q '^TERM 100$' "$kill_log"
 grep -q '^KILL 101$' "$kill_log"
 mock_no_codex_processes
-"$ROOT/bin/aic" codex use personal >/dev/null
+switch_codex_impl personal >/dev/null
 
 cat >"$TMP/bin/pgrep" <<'SH'
 #!/usr/bin/env bash
@@ -162,24 +276,24 @@ fi
 exit 1
 SH
 chmod +x "$TMP/bin/pgrep"
-output="$("$ROOT/bin/aic" codex use company 2>&1)"
+output="$(switch_codex_impl company 2>&1)"
 assert_contains "$output" "VS Code Codex app-server is running"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 mock_no_codex_processes
-"$ROOT/bin/aic" codex use personal >/dev/null
+switch_codex_impl personal >/dev/null
 
 touch "$TMP/not-a-codex-home"
-if AIC_CODEX_HOME="$TMP/not-a-codex-home" "$ROOT/bin/aic" codex use company >/dev/null 2>&1; then
+if ( CODEX_HOME_DIR="$TMP/not-a-codex-home" switch_codex_impl company ) >/dev/null 2>&1; then
   printf 'Expected account switch to fail when Codex home is not writable\n' >&2
   exit 1
 fi
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
-output="$("$ROOT/bin/aic" list)"
+output="$(list_accounts)"
 assert_contains "$output" "personal"
 assert_contains "$output" "company"
 
-printf 'claude-test-token\n' | "$ROOT/bin/aic" claude add personal >/dev/null
+printf 'claude-test-token\n' | add_claude_token personal >/dev/null
 test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/personal.json")" = "claude-test-token"
 
 output="$("$ROOT/bin/aic" status)"
@@ -209,12 +323,12 @@ jq '.account = "company" |
     .limits.five_hour.resets_at_epoch = 1781506075 |
     .limits.weekly.resets_at_epoch = 1781603429' \
   "$AIC_DATA_DIR/usage/codex-personal.json" >"$AIC_DATA_DIR/usage/codex-company.json"
-output="$("$ROOT/bin/aic" recommend)"
+output="$(print_codex_recommendations)"
 assert_contains "$output" "Best now: company"
 assert_contains "$output" "★ best"
 assert_contains "$output" "5h usage is low"
 
-"$ROOT/bin/aic" codex use company >/dev/null
+switch_codex_impl company >/dev/null
 "$ROOT/bin/aic" refresh codex personal
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "company"
@@ -291,6 +405,7 @@ install_bin="$TMP/install-bin"
 AIC_APP_DIR="$install_app" AIC_INSTALL_DIR="$install_bin" "$ROOT/install.sh" >/dev/null
 test -x "$install_app/bin/aic"
 test -x "$install_app/install.sh"
+test -f "$install_app/lib/aic/_load.sh"
 test -L "$install_bin/aic"
 expected_version="$("$ROOT/bin/aic" version)"
 test "$("$install_bin/aic" version)" = "$expected_version"
@@ -306,19 +421,19 @@ test -f "$uninstall_data/keep.json"
 output="$(printf 'q' | "$ROOT/bin/aic")"
 assert_contains "$output" "refresh:"
 
-"$ROOT/bin/aic" codex rename company company-renamed >/dev/null
+rename_codex_account company company-renamed >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/codex/company.json"
 test -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
 test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/company-renamed.json")" = "account-company"
 
-printf 'claude-rename-test\n' | "$ROOT/bin/aic" claude add rename-src >/dev/null
-"$ROOT/bin/aic" claude rename rename-src rename-dst >/dev/null
+printf 'claude-rename-test\n' | add_claude_token rename-src >/dev/null
+rename_claude_account rename-src rename-dst >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/rename-src.json"
 test -f "$AIC_DATA_DIR/accounts/claude/rename-dst.json"
 test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/rename-dst.json")" = "claude-rename-test"
-"$ROOT/bin/aic" claude remove rename-dst >/dev/null
+remove_claude rename-dst >/dev/null
 
-"$ROOT/bin/aic" codex remove company-renamed >/dev/null
+remove_codex_impl company-renamed >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
 test "$(jq -r '.active_codex_account // empty' "$AIC_DATA_DIR/state.json")" = ""
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
@@ -338,7 +453,7 @@ export CLAUDE_CRED_FILE
 printf '{"claudeAiOauth":{"accessToken":"old-token","refreshToken":"old-rt","expiresAt":1000},"organizationUuid":"old-org","mcpOAuth":{"plugin:test":{"accessToken":"mcp-token"}}}\n' >"$CLAUDE_CRED_FILE"
 
 # Switch to the new account
-"$ROOT/bin/aic" claude use switch-test >/dev/null
+switch_claude_impl switch-test >/dev/null
 
 # Verify: accessToken and orgUuid updated, mcpOAuth preserved
 test "$(jq -r '.claudeAiOauth.accessToken' "$CLAUDE_CRED_FILE")" = "sk-ant-oat01-test"
@@ -356,21 +471,21 @@ chmod 600 "$AIC_DATA_DIR/accounts/claude/expired-test.json"
 
 # Switching with expired token writes it to keychain and calls claude auth status;
 # since there's no real claude, the refresh fails gracefully but switch still happens
-"$ROOT/bin/aic" claude use expired-test 2>/dev/null || true
+switch_claude_impl expired-test >/dev/null 2>&1 || true
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "expired-test"
 
 # Verify token-only accounts (from add_claude_token) cannot switch
-if "$ROOT/bin/aic" claude use personal 2>/dev/null; then
+if ( switch_claude_impl personal ) >/dev/null 2>&1; then
   printf 'ERROR: token-only account should have failed switch\n' >&2
   exit 1
 fi
 
 # Clean up
-"$ROOT/bin/aic" claude remove switch-test >/dev/null
-"$ROOT/bin/aic" claude remove expired-test >/dev/null
+remove_claude switch-test >/dev/null
+remove_claude expired-test >/dev/null
 unset CLAUDE_CRED_FILE
 
-"$ROOT/bin/aic" claude remove personal >/dev/null
+remove_claude personal >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/personal.json"
 
 # Model profile tests — create profile directly (bypass interactive wizard)
@@ -389,10 +504,10 @@ jq -n '{
 }' >"$profile_file"
 chmod 600 "$profile_file"
 
-# list
-output="$("$ROOT/bin/aic" model list)"
+# list (model_profile_names + display name)
+output="$(model_profile_names)"
 assert_contains "$output" "test-deepseek"
-assert_contains "$output" "DeepSeek V4 Pro"
+assert_contains "$(jq -r '.display_name' "$profile_file")" "DeepSeek V4 Pro"
 
 # launch_with_profile: mock claude binary prints the env it receives
 cat >"$TMP/bin/claude" <<'SH'
@@ -406,7 +521,7 @@ printf 'CLAUDE_CODE_SUBAGENT_MODEL=%s\n' "${CLAUDE_CODE_SUBAGENT_MODEL:-}"
 SH
 chmod +x "$TMP/bin/claude"
 
-output="$("$ROOT/bin/aic" model run test-deepseek 2>/dev/null)"
+output="$(launch_with_profile test-deepseek 2>/dev/null)"
 assert_contains "$output" "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic"
 assert_contains "$output" "ANTHROPIC_AUTH_TOKEN=sk-test-deepseek-key"
 assert_contains "$output" "ANTHROPIC_MODEL=deepseek-v4-pro"
@@ -414,11 +529,25 @@ assert_contains "$output" "ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro"
 assert_contains "$output" "ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash"
 assert_contains "$output" "CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash"
 
+# launch_codex_with_profile: mock codex binary prints the env and args it receives
+cat >"$TMP/bin/codex" <<'SH'
+#!/usr/bin/env bash
+printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY:-}"
+printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL:-}"
+printf 'ARGS=%s\n' "$*"
+SH
+chmod +x "$TMP/bin/codex"
+
+output="$(launch_codex_with_profile test-deepseek --no-alt-screen 2>/dev/null)"
+assert_contains "$output" "OPENAI_API_KEY=sk-test-deepseek-key"
+assert_contains "$output" "OPENAI_BASE_URL=https://api.deepseek.com"
+assert_contains "$output" 'ARGS=-c openai_base_url="https://api.deepseek.com" --model deepseek-v4-pro --no-alt-screen'
+
 # remove
-"$ROOT/bin/aic" model remove test-deepseek >/dev/null
+remove_model_profile test-deepseek >/dev/null
 test ! -f "$profile_file"
 
-"$ROOT/bin/aic" schedule off >/dev/null
+disable_schedule >/dev/null
 test "$(jq -r '.schedule.enabled' "$AIC_DATA_DIR/config.json")" = "false"
 
 printf 'All tests passed.\n'
