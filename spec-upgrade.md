@@ -6,6 +6,36 @@ Primary constraint: keep the app lightweight. Do not migrate to Tauri, Rust,
 Electron, or a resident GUI. The shell script remains the main product. Helper
 scripts are allowed only when they keep the operational model simple.
 
+## Update Log
+
+### 2026-07-04 — v0.12.0: Modularization + menu-first CLI
+
+- **Refactor:** the single ~3.9k-line `bin/aic` is now a thin entrypoint that
+  sources focused modules under `lib/aic/` (`core`, `codex`, `codex-import`,
+  `codex-process`, `claude`, `model`, `usage`, `ui`, `schedule`, `lifecycle`)
+  via `lib/aic/_load.sh`. Behavior preserved; the test suite was re-targeted to
+  unit-test the modules directly.
+- **Menu-first command surface:** removed the one-line verbs (`codex …`,
+  `claude …`, `model …`, `schedule …`, `recommend`, `list`, `config`, `debug`).
+  The interactive menu (`aic`) is the only human interface. Remaining
+  non-interactive commands: `aic`, `aic refresh [codex|claude NAME]`,
+  `aic status`, `aic update`, `aic uninstall` (+ `version`/`help`).
+- **Login is menu-only.** The `aic codex login NAME --device-auth` CLI form
+  (see §3) is removed; browser login runs from *Add Codex account → Login with
+  browser*. On a headless machine, import `auth.json` instead (*Add Codex
+  account → Import from file or paste*). Any future device-code login would be a
+  menu choice, not a CLI flag.
+- **Gaps folded into the menu:** model-profile removal (*Open … with model →
+  Manage profiles*) and diagnostics (*Help → Diagnostics*, formerly `aic debug`).
+- **Fix:** a Claude account at 100% usage now shows `100% + reset` instead of
+  `ERR`. The rejected probe (HTTP 429) still returns the
+  `anthropic-ratelimit-unified-*` headers, which are now trusted regardless of
+  HTTP status.
+
+> The sections below predate this update and still describe the old
+> per-command CLI surface; treat them as historical design context. The
+> encrypted backup/export in §6 remains the planned real backup feature.
+
 ## Working Rules
 
 - Implement one feature per commit.

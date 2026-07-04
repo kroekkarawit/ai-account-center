@@ -1,2 +1,5 @@
 .DS_Store
 *.log
+
+# Local, one-off account backups — contain LIVE tokens/API keys. Never commit.
+aic-account-backup*.txt
