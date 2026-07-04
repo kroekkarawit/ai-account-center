@@ -143,7 +143,7 @@ manage_account_menu() {
       if [[ "$provider" == "Codex" ]]; then
         with_lock relogin_codex_browser "$name"
       else
-        login_claude "$name"
+        with_lock relogin_claude_oauth "$name"
       fi
       ;;
     reimport)
@@ -909,4 +909,3 @@ interactive_menu() {
     IFS= read -r _ </dev/tty
   done
 }
-

@@ -22,6 +22,12 @@ SH
 
 mock_no_codex_processes
 
+cat >"$TMP/bin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+chmod +x "$TMP/bin/claude"
+
 cat >"$AIC_CODEX_HOME/auth.json" <<'JSON'
 {
   "auth_mode": "chatgpt",
@@ -553,6 +559,24 @@ if ( switch_claude_impl personal ) >/dev/null 2>&1; then
   printf 'ERROR: token-only account should have failed switch\n' >&2
   exit 1
 fi
+
+cat >"$TMP/bin/claude" <<'SH'
+#!/usr/bin/env bash
+if [[ "$1" == "auth" && "$2" == "login" && "$3" == "--claudeai" ]]; then
+  cat >"$CLAUDE_CRED_FILE" <<'JSON'
+{"claudeAiOauth":{"accessToken":"sk-ant-oat01-relogin","refreshToken":"sk-ant-ort01-relogin","expiresAt":4102444800000,"scopes":["user:inference"],"subscriptionType":"pro","rateLimitTier":"default"},"organizationUuid":"relogin-org"}
+JSON
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$TMP/bin/claude"
+hash -r
+
+relogin_claude_oauth personal >/dev/null
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/personal.json")" = "sk-ant-ort01-relogin"
+switch_claude_impl personal >/dev/null
+test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
 # Clean up
 remove_claude switch-test >/dev/null

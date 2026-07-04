@@ -66,6 +66,16 @@ write_claude_keychain() {
 import_current_claude() {
   local name="$1"
   validate_name "$name"
+  local destination
+  destination="$(claude_account_file "$name")"
+  [[ ! -f "$destination" ]] || die "Claude account already exists: $name"
+  save_current_claude_oauth "$name"
+  printf 'Saved Claude account: %s\n' "$name"
+}
+
+save_current_claude_oauth() {
+  local name="$1"
+  validate_name "$name"
   local blob oauth_obj refresh_token org_uuid destination
   blob="$(current_claude_oauth_blob)"
   [[ -n "$blob" ]] || die "No Claude OAuth login found. Add it from the menu: Add Claude account → Login with OAuth."
@@ -75,7 +85,6 @@ import_current_claude() {
     die "Claude login found but missing OAuth tokens. Re-add from the menu: Add Claude account → Login with OAuth."
   org_uuid="$(jq -r '.organizationUuid // empty' <<<"$blob" 2>/dev/null)"
   destination="$(claude_account_file "$name")"
-  [[ ! -f "$destination" ]] || die "Claude account already exists: $name"
   jq -n \
     --argjson oauth "$oauth_obj" \
     --arg org "$org_uuid" \
@@ -84,7 +93,6 @@ import_current_claude() {
     >"$destination.tmp" || die "Could not store Claude account."
   chmod 600 "$destination.tmp"
   mv -f "$destination.tmp" "$destination"
-  printf 'Saved Claude account: %s\n' "$name"
 }
 
 login_claude() {
@@ -94,6 +102,28 @@ login_claude() {
   printf 'Starting Claude subscription login for account: %s\n' "$name"
   claude auth login --claudeai || die "Claude login failed."
   import_current_claude "$name"
+}
+
+relogin_claude_oauth() {
+  local name="$1"
+  validate_name "$name"
+  require_command claude
+  local existing_file backup
+  existing_file="$(claude_account_file "$name")"
+  [[ -f "$existing_file" ]] || die "Unknown Claude account: $name"
+  backup="$existing_file.relogin-$$"
+  cp "$existing_file" "$backup"
+  chmod 600 "$backup"
+
+  printf 'Starting Claude subscription re-login for account: %s\n' "$name"
+  if claude auth login --claudeai && ( save_current_claude_oauth "$name" ); then
+    rm -f "$backup"
+    printf 'Re-login complete for account: %s\n' "$name"
+  else
+    mv "$backup" "$existing_file"
+    warn "Re-login failed. Original credentials restored for: $name"
+    return 1
+  fi
 }
 
 is_claude_token_expired() {
@@ -229,4 +259,3 @@ rename_claude_account() {
   [[ -f "$old_usage" ]] && mv "$old_usage" "$new_usage" || true
   printf 'Renamed Claude account: %s → %s\n' "$old_name" "$new_name"
 }
-
