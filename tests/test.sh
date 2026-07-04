@@ -289,7 +289,7 @@ if ( CODEX_HOME_DIR="$TMP/not-a-codex-home" switch_codex_impl company ) >/dev/nu
 fi
 test "$(jq -r '.active_codex_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
-output="$(list_accounts)"
+output="$(codex_names)"
 assert_contains "$output" "personal"
 assert_contains "$output" "company"
 
@@ -530,6 +530,10 @@ test "$(jq -r '.claudeAiOauth.accessToken' "$CLAUDE_CRED_FILE")" = "sk-ant-oat01
 test "$(jq -r '.organizationUuid' "$CLAUDE_CRED_FILE")" = "test-org-uuid"
 test "$(jq -r '.mcpOAuth["plugin:test"].accessToken' "$CLAUDE_CRED_FILE")" = "mcp-token"
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "switch-test"
+
+# The dashboard marks the active Claude account with ">" (same as Codex).
+output="$("$ROOT/bin/aic" status)"
+assert_contains "$output" ">switch-test"
 
 # Verify expired token detection: create account with past expiresAt
 past_ms=$(( ($(date +%s) - 3600) * 1000 ))

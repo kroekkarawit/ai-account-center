@@ -177,8 +177,9 @@ print_dashboard_header() {
 }
 
 print_status() {
-  local active
-  active="$(active_codex_name)"
+  local active_codex active_claude active_name
+  active_codex="$(active_codex_name)"
+  active_claude="$(active_claude_name)"
   local errors=()
   printf '%s%-9s %-19s %-29s %-38s%s\n' \
     "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR LIMIT" "7-DAY LIMIT" "$RESET"
@@ -191,9 +192,11 @@ print_status() {
     if [[ "$provider" == "codex" ]]; then
       dir="$CODEX_ACCOUNTS_DIR"
       provider_color="$CYAN"
+      active_name="$active_codex"
     else
       dir="$CLAUDE_ACCOUNTS_DIR"
       provider_color="$MAGENTA"
+      active_name="$active_claude"
     fi
 
     for file in "$dir"/*.json; do
@@ -201,7 +204,7 @@ print_status() {
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
       marker=" "
-      [[ "$provider" == "codex" && "$active" == "$name" ]] && marker=">"
+      [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
 
       if [[ ! -f "$usage" ]]; then
         printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
@@ -240,26 +243,6 @@ print_status() {
       printf '  %s!%s %s\n' "$RED" "$RESET" "$error"
     done
   fi
-}
-
-list_accounts() {
-  local active name file
-  active="$(active_codex_name)"
-  printf '%sCodex%s\n' "$BOLD" "$RESET"
-  for file in "$CODEX_ACCOUNTS_DIR"/*.json; do
-    [[ -e "$file" ]] || continue
-    name="$(basename "$file" .json)"
-    if [[ "$name" == "$active" ]]; then
-      printf '  * %s\n' "$name"
-    else
-      printf '    %s\n' "$name"
-    fi
-  done
-  printf '%sClaude%s\n' "$BOLD" "$RESET"
-  for file in "$CLAUDE_ACCOUNTS_DIR"/*.json; do
-    [[ -e "$file" ]] || continue
-    printf '    %s\n' "$(basename "$file" .json)"
-  done
 }
 
 choose_from() {
