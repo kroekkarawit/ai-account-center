@@ -513,7 +513,12 @@ ADD A CLAUDE ACCOUNT
 Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
   Import current login  - import an existing Claude Code login
-  Add token manually    - store a setup-token or OAuth token
+  Add token manually    - store a setup-token or OAuth token from
+                          `claude setup-token`
+
+To get a Claude setup token, run `claude setup-token` in another terminal,
+authenticate in the browser, then copy the shown `sk-ant-oat01-...` token back
+into Account Center. The token is shown only once by Claude Code.
 
 MONITORING
 "Refresh all usage" updates every stored account.
@@ -603,7 +608,12 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
   Import current login  - ใช้ login ที่ Claude Code มีอยู่แล้ว
-  Add token manually    - เก็บ setup-token หรือ OAuth token ด้วยตัวเอง
+  Add token manually    - เก็บ setup-token หรือ OAuth token จาก
+                          `claude setup-token`
+
+ถ้าต้องการ setup token ให้รัน `claude setup-token` ใน terminal อีกหน้าต่าง
+กดยืนยันใน browser แล้ว copy token ที่ขึ้นต้นด้วย `sk-ant-oat01-...` กลับมา
+ใส่ใน Account Center. Claude Code จะแสดง token นี้เพียงครั้งเดียว
 
 การ MONITOR
 "Refresh all usage" อัปเดตข้อมูลทุกบัญชี

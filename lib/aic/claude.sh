@@ -3,6 +3,18 @@
 # Claude accounts: keychain, OAuth import, subscription login, switch
 # Sourced by lib/aic/_load.sh; not executed directly.
 
+print_claude_token_instructions() {
+  cat >&2 <<'EOF'
+Claude token setup:
+  1. Open another terminal.
+  2. Run: claude setup-token
+  3. Authenticate in the browser when Claude opens it.
+  4. Return to the terminal and copy the token that starts with sk-ant-oat01-.
+  5. Paste that token here. Input is hidden.
+
+EOF
+}
+
 add_claude_token() {
   local name="$1"
   local token="${2:-}"
@@ -12,6 +24,7 @@ add_claude_token() {
     if [[ ! -t 0 ]]; then
       IFS= read -r token
     else
+      print_claude_token_instructions
       printf 'Claude subscription token: ' >&2
       IFS= read -r -s token
       printf '\n' >&2
