@@ -118,7 +118,7 @@ the menu warns you and offers to close running sessions.
 - **Login with OAuth** — full Claude subscription OAuth (needed for usage
   monitoring), imported automatically.
 - **Import current login** — imports an existing Claude Code login.
-- **Add token manually** — stores a `setup-token` or OAuth token with hidden
+- **Add setup-token manually** — stores a `setup-token` or OAuth token with hidden
   input. To get one, run `claude setup-token`, authenticate in the browser,
   then copy the shown `sk-ant-oat01-...` token back into Account Center. Claude
   Code shows this token only once. A `setup-token` is inference-only; see

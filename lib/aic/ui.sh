@@ -105,7 +105,7 @@ manage_account_menu() {
       "↻  Refresh this account::refresh"
       "✎  Rename::rename"
       "◇  Re-login OAuth::relogin"
-      "◈  Update token::update-token"
+      "◈  Update setup-token::update-token"
       "×  Remove::remove"
     )
   fi
@@ -513,7 +513,8 @@ ADD A CLAUDE ACCOUNT
 Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
   Import current login  - import an existing Claude Code login
-  Add token manually    - store a setup-token or OAuth token from
+  Add setup-token manually
+                        - store a setup-token or OAuth token from
                           `claude setup-token`
 
 To get a Claude setup token, run `claude setup-token` in another terminal,
@@ -608,7 +609,8 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
   Import current login  - ใช้ login ที่ Claude Code มีอยู่แล้ว
-  Add token manually    - เก็บ setup-token หรือ OAuth token จาก
+  Add setup-token manually
+                        - เก็บ setup-token หรือ OAuth token จาก
                           `claude setup-token`
 
 ถ้าต้องการ setup token ให้รัน `claude setup-token` ใน terminal อีกหน้าต่าง
@@ -889,7 +891,7 @@ interactive_menu() {
           sub="$(choose_from "Add Claude account" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \
-            "$(menu_item claude-token "Add token manually (from setup-token)" claude-add-token)" \
+            "$(menu_item claude-token "Add setup-token manually" claude-add-token)" \
           )" || continue
           sub="${sub##*::}"
           case "$sub" in

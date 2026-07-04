@@ -3,16 +3,34 @@
 # Claude accounts: keychain, OAuth import, subscription login, switch
 # Sourced by lib/aic/_load.sh; not executed directly.
 
-print_claude_token_instructions() {
-  cat >&2 <<'EOF'
-Claude token setup:
-  1. Open another terminal.
-  2. Run: claude setup-token
-  3. Authenticate in the browser when Claude opens it.
-  4. Return to the terminal and copy the token that starts with sk-ant-oat01-.
-  5. Paste that token here. Input is hidden.
+claude_token_box_plain() {
+  local text="$1" style="${2:-}" pad
+  pad=$((60 - ${#text}))
+  (( pad < 0 )) && pad=0
+  printf '%s|%s%s%s%*s%s|%s\n' \
+    "$CYAN" "$RESET" "$style" "$text" "$pad" "" "$CYAN" "$RESET" >&2
+}
 
-EOF
+claude_token_box_highlight() {
+  local left="$1" highlight="$2" right="$3" pad
+  pad=$((60 - ${#left} - ${#highlight} - ${#right}))
+  (( pad < 0 )) && pad=0
+  printf '%s|%s%s%s%s%s%s%*s%s|%s\n' \
+    "$CYAN" "$RESET" "$left" "$YELLOW" "$highlight" "$RESET" "$right" \
+    "$pad" "" "$CYAN" "$RESET" >&2
+}
+
+print_claude_token_instructions() {
+  printf '%s+------------------------------------------------------------+%s\n' "$CYAN" "$RESET" >&2
+  claude_token_box_plain "  CLAUDE SETUP TOKEN" "$BOLD"
+  claude_token_box_plain ""
+  claude_token_box_highlight "  1  Run " "claude setup-token" " in another terminal."
+  claude_token_box_plain "  2  Approve the browser login."
+  claude_token_box_highlight "  3  Paste the " "sk-ant-oat01-..." " token here."
+  claude_token_box_plain ""
+  claude_token_box_plain "  Claude shows this token once. Input below is hidden." "$DIM"
+  printf '%s+------------------------------------------------------------+%s\n' "$CYAN" "$RESET" >&2
+  printf '\n' >&2
 }
 
 add_claude_token() {
@@ -25,7 +43,7 @@ add_claude_token() {
       IFS= read -r token
     else
       print_claude_token_instructions
-      printf 'Claude subscription token: ' >&2
+      printf '%sPaste setup token:%s ' "$BOLD" "$RESET" >&2
       IFS= read -r -s token
       printf '\n' >&2
     fi
