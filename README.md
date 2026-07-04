@@ -138,13 +138,13 @@ not log the account out — it only removes Account Center's saved copy.
 
 ### Move accounts to another machine (export / import)
 
-**Manage accounts → Export accounts** bundles the accounts you pick (Space to
-multi-select) into a single encrypted, self-expiring transfer — either **saved
-to a file** (folder picker) or shown as a **copy-paste string**. On the other
-machine, **Manage accounts → Import accounts** reads the file or pasted string,
-previews what's inside, lets you pick which to import, and resolves any
-duplicates (replace / rename / skip). Because the full account is transferred,
-the new machine works without a fresh browser login or 2FA.
+The top-level **Export / Import accounts** menu bundles the accounts you pick
+(Space to multi-select) into a single encrypted, self-expiring transfer —
+either **saved to a file** (folder picker) or shown as a **copy-paste string**.
+On the other machine, **Export / Import accounts → Import** reads the file or
+pasted string, previews what's inside, lets you pick which to import, and
+resolves any duplicates (replace / rename / skip). Because the full account is
+transferred, the new machine works without a fresh browser login or 2FA.
 
 The transfer is encrypted by aic and **expires after 3 days**. Note this is
 *obfuscation, not secrecy*: aic is open source, so anyone who runs aic could

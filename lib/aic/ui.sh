@@ -27,6 +27,9 @@ menu_icon() {
       claude-import) printf '⇠' ;;
       claude-token) printf '◈' ;;
       manage) printf '✎' ;;
+      transfer) printf '⇄' ;;
+      export) printf '⇪' ;;
+      import) printf '⇩' ;;
       refresh) printf '↻' ;;
       schedule) printf '⏱' ;;
       remove) printf '×' ;;
@@ -50,6 +53,9 @@ menu_icon() {
       claude-import) printf 'A<' ;;
       claude-token) printf 'A#' ;;
       manage) printf 'M~' ;;
+      transfer) printf 'IO' ;;
+      export) printf 'E>' ;;
+      import) printf 'I<' ;;
       refresh) printf 'R*' ;;
       schedule) printf 'T~' ;;
       remove) printf 'X-' ;;
@@ -67,27 +73,17 @@ menu_item() {
 }
 
 manage_account_menu() {
-  local options=() acct_entries=() item provider name
+  local options=() item provider name
   while IFS= read -r name; do
-    [[ -n "$name" ]] && acct_entries+=("Codex  | $name")
+    [[ -n "$name" ]] && options+=("Codex  | $name")
   done < <(codex_names)
   while IFS= read -r name; do
-    [[ -n "$name" ]] && acct_entries+=("Claude | $name")
+    [[ -n "$name" ]] && options+=("Claude | $name")
   done < <(claude_names)
 
-  # Import is always offered (you may be importing onto an empty machine);
-  # export and the per-account entries only when accounts exist.
-  options+=("⇩  Import accounts (file or string)::__import__")
-  if [[ "${#acct_entries[@]}" -gt 0 ]]; then
-    options+=("⇪  Export accounts (file or string)::__export__")
-    options+=("${acct_entries[@]}")
-  fi
+  [[ "${#options[@]}" -gt 0 ]] || { warn "No accounts found."; return 1; }
 
-  item="$(choose_from "Manage / transfer accounts" "${options[@]}")" || return 1
-  case "$item" in
-    *"::__import__") interactive_import_accounts; return ;;
-    *"::__export__") interactive_export_accounts; return ;;
-  esac
+  item="$(choose_from "Select account to manage" "${options[@]}")" || return 1
   provider="${item%%|*}"
   provider="${provider// /}"
   name="${item#*| }"
@@ -841,6 +837,7 @@ interactive_menu() {
         "$(menu_item add-claude "Add Claude account →" add-claude)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
         "$(menu_item manage "Manage accounts" manage)" \
+        "$(menu_item transfer "Export / Import accounts →" transfer)" \
         "$(menu_item schedule "$sched_label" settings)" \
         "$(menu_item help "Help / คู่มือ" help)" \
         "$(menu_item exit "Exit" exit)"
@@ -917,6 +914,18 @@ interactive_menu() {
         esac
         ;;
       manage) manage_account_menu ;;
+      transfer)
+        local sub
+        sub="$(choose_from "Export / Import accounts" \
+          "$(menu_item export "Export accounts (to file or string)" export)" \
+          "$(menu_item import "Import accounts (from file or string)" import)" \
+        )" || continue
+        sub="${sub##*::}"
+        case "$sub" in
+          export) interactive_export_accounts ;;
+          import) interactive_import_accounts ;;
+        esac
+        ;;
       refresh-all) refresh_all || true ;;
       settings) interactive_config_editor ;;
       help) interactive_help ;;
