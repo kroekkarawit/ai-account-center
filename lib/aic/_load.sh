@@ -5,7 +5,7 @@
 # the remaining modules only define functions, so their order does not matter.
 
 __aic_lib_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for __aic_mod in core codex-process codex codex-import claude model usage ui schedule lifecycle; do
+for __aic_mod in core codex-process codex codex-import claude model usage ui schedule lifecycle transfer; do
   # shellcheck source=/dev/null
   source "$__aic_lib_dir/$__aic_mod.sh"
 done

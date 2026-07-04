@@ -136,6 +136,22 @@ re-login, re-import (Codex), update token (Claude), and remove. Removing an
 active Codex profile does **not** delete the live `~/.codex/auth.json` and does
 not log the account out — it only removes Account Center's saved copy.
 
+### Move accounts to another machine (export / import)
+
+**Manage accounts → Export accounts** bundles the accounts you pick (Space to
+multi-select) into a single encrypted, self-expiring transfer — either **saved
+to a file** (folder picker) or shown as a **copy-paste string**. On the other
+machine, **Manage accounts → Import accounts** reads the file or pasted string,
+previews what's inside, lets you pick which to import, and resolves any
+duplicates (replace / rename / skip). Because the full account is transferred,
+the new machine works without a fresh browser login or 2FA.
+
+The transfer is encrypted by aic and **expires after 3 days**. Note this is
+*obfuscation, not secrecy*: aic is open source, so anyone who runs aic could
+decode the blob — it protects against accidental leaks and secret-scanners, not
+a determined attacker. Send it to yourself over a channel you trust, import it,
+then delete it. (Model profiles and config are not included.)
+
 ### Settings
 
 **Settings** edits `~/.ai-account-center/config.json`: display timezone, the
@@ -216,6 +232,7 @@ lib/aic/usage.sh        # refresh, rate-limit parsing, scoring
 lib/aic/ui.sh           # TUI primitives, dashboard, menus, help, settings
 lib/aic/schedule.sh     # scheduled refresh (launchd/systemd)
 lib/aic/lifecycle.sh    # self update/uninstall + diagnostics
+lib/aic/transfer.sh     # encrypted account export/import between machines
 lib/codex-rate-limits.mjs
 ```
 

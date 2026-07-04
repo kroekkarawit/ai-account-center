@@ -67,17 +67,27 @@ menu_item() {
 }
 
 manage_account_menu() {
-  local options=() item provider name
+  local options=() acct_entries=() item provider name
   while IFS= read -r name; do
-    [[ -n "$name" ]] && options+=("Codex  | $name")
+    [[ -n "$name" ]] && acct_entries+=("Codex  | $name")
   done < <(codex_names)
   while IFS= read -r name; do
-    [[ -n "$name" ]] && options+=("Claude | $name")
+    [[ -n "$name" ]] && acct_entries+=("Claude | $name")
   done < <(claude_names)
 
-  [[ "${#options[@]}" -gt 0 ]] || { warn "No accounts found."; return 1; }
+  # Import is always offered (you may be importing onto an empty machine);
+  # export and the per-account entries only when accounts exist.
+  options+=("⇩  Import accounts (file or string)::__import__")
+  if [[ "${#acct_entries[@]}" -gt 0 ]]; then
+    options+=("⇪  Export accounts (file or string)::__export__")
+    options+=("${acct_entries[@]}")
+  fi
 
-  item="$(choose_from "Select account to manage" "${options[@]}")" || return 1
+  item="$(choose_from "Manage / transfer accounts" "${options[@]}")" || return 1
+  case "$item" in
+    *"::__import__") interactive_import_accounts; return ;;
+    *"::__export__") interactive_export_accounts; return ;;
+  esac
   provider="${item%%|*}"
   provider="${provider// /}"
   name="${item#*| }"
@@ -343,6 +353,81 @@ choose_from() {
           printf '%s\n' "${options[$((key - 1))]}"
           return 0
         fi
+        ;;
+    esac
+  done
+}
+
+# Multi-select checkbox picker. Prints the ::value of each checked option, one
+# per line. Space toggles, 'a' toggles all, Enter confirms, Esc/q cancels.
+choose_multi() {
+  local prompt="$1"
+  shift
+  local options=("$@")
+  [[ "${#options[@]}" -gt 0 ]] || return 1
+
+  local selected=() i cursor=0 key rest lines box label anyoff
+  for ((i = 0; i < ${#options[@]}; i++)); do selected[i]=0; done
+  lines=$((${#options[@]} + 3))
+
+  if [[ -t 0 ]]; then
+    exec 3<&0
+  elif [[ -r /dev/tty ]]; then
+    { exec 3</dev/tty; } 2>/dev/null || return 1
+  else
+    return 1
+  fi
+
+  local rendered=0
+  while true; do
+    if ((rendered == 0)); then
+      printf '%s%s%s\n' "$BOLD" "$prompt" "$RESET" >&2
+      printf '%s  Up/Down or j/k · Space toggle · a all · Enter confirm · Esc/q cancel%s\n' \
+        "$DIM" "$RESET" >&2
+      for ((i = 0; i < ${#options[@]}; i++)); do
+        label="${options[$i]%%::*}"
+        ((selected[i])) && box="[x]" || box="[ ]"
+        if ((i == cursor)); then
+          printf ' %s%s %-42s%s\n' "$REVERSE$CYAN" "$box" "$label" "$RESET" >&2
+        else
+          printf ' %s %-42s\n' "$box" "$label" >&2
+        fi
+      done
+      printf '\n' >&2
+      rendered=1
+    fi
+
+    IFS= read -r -s -n 1 key <&3 || {
+      exec 3<&-
+      return 1
+    }
+    if [[ "$key" == $'\033' ]]; then
+      rest=""
+      IFS= read -r -s -n 2 -t 1 rest <&3 || true
+      key+="$rest"
+    fi
+
+    printf '\033[%dA\033[J' "$lines" >&2
+    rendered=0
+    case "$key" in
+      $'\033[A'|k|K) cursor=$(((cursor - 1 + ${#options[@]}) % ${#options[@]})) ;;
+      $'\033[B'|j|J) cursor=$(((cursor + 1) % ${#options[@]})) ;;
+      ' ') ((selected[cursor] = !selected[cursor])) ;;
+      a|A)
+        anyoff=0
+        for ((i = 0; i < ${#options[@]}; i++)); do ((selected[i])) || anyoff=1; done
+        for ((i = 0; i < ${#options[@]}; i++)); do selected[i]=$anyoff; done
+        ;;
+      ""|$'\n'|$'\r')
+        exec 3<&-
+        for ((i = 0; i < ${#options[@]}; i++)); do
+          ((selected[i])) && printf '%s\n' "${options[$i]##*::}"
+        done
+        return 0
+        ;;
+      q|Q|$'\033')
+        exec 3<&-
+        return 1
         ;;
     esac
   done

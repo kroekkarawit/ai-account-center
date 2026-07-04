@@ -624,4 +624,69 @@ test ! -f "$profile_file"
 disable_schedule >/dev/null
 test "$(jq -r '.schedule.enabled' "$AIC_DATA_DIR/config.json")" = "false"
 
+# ---------------------------------------------------------------------------
+# Account transfer (encrypted export/import) — spec §7
+# ---------------------------------------------------------------------------
+cat >"$AIC_CODEX_HOME/auth.json" <<'JSON'
+{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"h.eyJlbWFpbCI6InhAeC5jb20ifQ.s","access_token":"ax-a","refresh_token":"rtx-a","account_id":"acct-XA"}}
+JSON
+save_live_codex_as xfera >/dev/null
+jq '.tokens.account_id="acct-XB"|.tokens.access_token="ax-b"|.tokens.refresh_token="rtx-b"' \
+  "$AIC_CODEX_HOME/auth.json" >"$AIC_CODEX_HOME/auth.json.tmp"
+mv "$AIC_CODEX_HOME/auth.json.tmp" "$AIC_CODEX_HOME/auth.json"
+save_live_codex_as xferb >/dev/null
+xfer_future=$(( ($(date +%s) + 3600) * 1000 ))
+jq -n --argjson e "$xfer_future" \
+  '{claudeAiOauth:{accessToken:"cx",refreshToken:"rtx-c",expiresAt:$e},organizationUuid:"org-X"}' \
+  >"$AIC_DATA_DIR/accounts/claude/xferc.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/xferc.json"
+
+# build + encode + decode round-trip is lossless
+xfer_payload="$(build_transfer_payload codex:xfera codex:xferb claude:xferc)"
+test "$(jq -r '.accounts | length' <<<"$xfer_payload")" = "3"
+xfer_blob="$(printf '%s' "$xfer_payload" | transfer_encode)"
+case "$xfer_blob" in AIC1.*) ;; *) printf 'blob prefix wrong: %s\n' "$xfer_blob" >&2; exit 1 ;; esac
+xfer_dec="$(transfer_decode "$xfer_blob")"
+test "$(jq -rS . <<<"$xfer_dec")" = "$(jq -rS . <<<"$xfer_payload")"
+
+# expiry: fresh ok, 3-day-old refused
+if transfer_payload_expired "$xfer_dec"; then printf 'fresh transfer flagged expired\n' >&2; exit 1; fi
+if ! transfer_payload_expired "$(jq '.created_at -= 999999' <<<"$xfer_payload")"; then
+  printf 'old transfer not flagged expired\n' >&2; exit 1
+fi
+
+# decode error codes: corrupt=4, newer version=3, not-an-aic-blob=2
+xfer_rc=0; transfer_decode "AIC1.1.@@notbase64@@" >/dev/null 2>&1 || xfer_rc=$?; test "$xfer_rc" = "4"
+xfer_rc=0; transfer_decode "AIC2.1.abcd"         >/dev/null 2>&1 || xfer_rc=$?; test "$xfer_rc" = "3"
+xfer_rc=0; transfer_decode "just some text"      >/dev/null 2>&1 || xfer_rc=$?; test "$xfer_rc" = "2"
+
+# duplicate detection + name helpers
+xfer_adata="$(jq -c '.accounts[0].data' <<<"$xfer_dec")"
+test "$(transfer_identity_conflict codex "$xfer_adata")" = "xfera"
+if ! transfer_name_exists codex xfera; then printf 'xfera should exist\n' >&2; exit 1; fi
+if transfer_name_exists codex nope-nope; then printf 'nope-nope should not exist\n' >&2; exit 1; fi
+test "$(transfer_unique_name codex xfera)" = "xfera-2"
+
+# write a brand-new account from transfer data + validate
+xfer_newdata="$(jq -c '.tokens.account_id="acct-XN"|.tokens.access_token="ax-n"|.tokens.refresh_token="rtx-n"' \
+  "$(codex_account_file xfera)")"
+transfer_write_account codex xferimported "$xfer_newdata"
+test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/xferimported.json")" = "acct-XN"
+
+# overwrite backs up the previous file
+transfer_write_account codex xferimported "$xfer_newdata"
+ls "$AIC_DATA_DIR/backups/"xferimported-xfer-*.json >/dev/null 2>&1 ||
+  { printf 'no backup created on overwrite\n' >&2; exit 1; }
+
+# invalid data is rejected, nothing written
+if transfer_write_account codex xferbad '{"garbage":true}' 2>/dev/null; then
+  printf 'invalid transfer data was accepted\n' >&2; exit 1
+fi
+test ! -f "$AIC_DATA_DIR/accounts/codex/xferbad.json"
+
+# claude account writes from transfer data
+xfer_cdata="$(jq -c '.accounts[2].data' <<<"$xfer_dec")"
+transfer_write_account claude xferc2 "$xfer_cdata"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/xferc2.json")" = "rtx-c"
+
 printf 'All tests passed.\n'
