@@ -33,8 +33,9 @@ scripts are allowed only when they keep the operational model simple.
   HTTP status.
 
 > The sections below predate this update and still describe the old
-> per-command CLI surface; treat them as historical design context. The
-> encrypted backup/export in §6 remains the planned real backup feature.
+> per-command CLI surface; treat them as historical design context. Account
+> transfer is now specified in §7 (Account Export / Import), which supersedes
+> §2 and §6.
 
 ## Working Rules
 
@@ -189,6 +190,9 @@ Harden Codex process cleanup on account switch
 ```
 
 ## 2. Slim Codex Export/Import
+
+> **Superseded by §7 (Account Export / Import).** The slim/re-mint approach was
+> dropped in favor of transferring full account data. Kept for historical context.
 
 ### Goal
 
@@ -543,6 +547,10 @@ Add privacy mask mode for account display
 
 ## 6. Full Encrypted Backup/Export
 
+> **Superseded by §7 (Account Export / Import).** §7 is the current design for
+> account transfer (accounts only, app-encrypted, self-expiring). Kept for
+> historical context.
+
 ### Goal
 
 Export all AIC account data for backup or migration, optionally encrypted with a
@@ -632,14 +640,141 @@ Suggested commit message:
 Add encrypted backup export and import
 ```
 
+## 7. Account Export / Import (encrypted transfer)
+
+Groomed 2026-07-04. Supersedes §2 (slim) and §6 (backup): decided to move the
+**full** account data (no token re-minting) via an app-encrypted, self-expiring
+file or copy-string. Primary use case: move accounts to a new machine without
+re-login / 2FA.
+
+### Locked Decisions
+
+- **Full account data**, not slim. Import writes the stored account file back and
+  relies on the existing switch/refresh path to renew tokens on first use — no
+  provider OAuth re-mint (the slim approach's re-mint was unverified and risky).
+- **Accounts only** — Codex + Claude account files. Model profiles and config are
+  out of scope (a separate third-party model manager will own profiles later).
+- **App-managed encryption, no user passphrase.** aic encrypts and decrypts with
+  an embedded key. This is *obfuscation, not confidentiality* (see Threat Model).
+- **Fixed 3-day expiry** (policy — not user-configurable).
+- **Two transports only:** a file, or a copy-string. No QR, no link, no PIN.
+- **Duplicate handling:** detect by identity and by name; ask replace/skip;
+  default skip.
+
+### Threat Model (explicit)
+
+The exported string/file is protected against: humans reading it, secret-scanners
+(no `sk-` / decodable-JWT shape), and accidental leakage into chats/logs. It is
+**not** protected against anyone who runs aic — the tool is open source and holds
+the key. The fixed 3-day expiry limits the window in which a leaked blob is
+usable. This trade-off is accepted deliberately.
+
+### Envelope Format
+
+```text
+AIC1.<base64url( [fmt_ver:1][key_ver:1][salt:16] + AES-256-CBC(pbkdf2)( gzip(payload) ) )>
+```
+
+- `AIC` magic + `fmt_ver` → unknown version imports as a clean
+  "made by a newer aic, please update" error, never garbage.
+- `key_ver` selects the embedded app key, so a future build can rotate the key
+  without breaking old blobs.
+- Random per-export `salt` → identical exports produce different blobs.
+- `gzip` before encrypt (correct order). Compression mainly shrinks JSON
+  structure / multi-account repetition; refresh tokens are high-entropy and do
+  not compress.
+- Encryption via `openssl enc -aes-256-cbc -pbkdf2 -salt` (present on
+  macOS + Linux; already an allowed dependency). CBC chosen for portability over
+  GCM per §6; authenticity is not a goal here (obfuscation only).
+
+### Payload Schema
+
+```json
+{
+  "v": 1,
+  "created_at": 1751630400,
+  "ttl": 259200,
+  "accounts": [
+    { "provider": "codex",  "name": "siki", "account_id": "acc_…", "data": { "auth_mode": "chatgpt", "tokens": { "…": "…" } } },
+    { "provider": "claude", "name": "work", "org": "org_…",        "data": { "claudeAiOauth": { "…": "…" } } }
+  ]
+}
+```
+
+- `data` is the exact stored account-file content (full `auth.json` / OAuth blob).
+- `account_id` (codex) / `org` (claude) are duplicated at the top for identity
+  dedup without decrypting deeply / decoding JWTs.
+- `name` preserves the origin's account name.
+
+### Export Flow  (Manage accounts → Export accounts)
+
+1. Multi-select accounts to include (`Space` toggles `[x]`, `a` = all).
+2. Choose transport:
+   - **File** — folder picker (macOS: `osascript -e 'choose folder'`; else typed
+     path, default `~/`). Writes `aic-transfer-<UTC>.aicx`, mode `0600`.
+   - **String** — print the `AIC1.…` blob; `c` copies it
+     (`pbcopy` / `xclip` / `wl-copy`; else "copy manually").
+3. Remind: expires in 3 days; send it to yourself (AirDrop / chat / upload);
+   delete after importing.
+
+### Import Flow  (Manage accounts → `i`)
+
+1. Source: **paste string** or **read file** (path / drag / clipboard) — reuses
+   the existing paste/import engine.
+2. Decode → decrypt → check expiry. Any failure (bad magic, wrong version,
+   corrupt, expired) aborts cleanly with **no changes**.
+3. Preview the accounts found in the bundle.
+4. Multi-select which to import; resolve per account:
+   - **same identity already present** (by `account_id`/`org`, reusing existing
+     duplicate detection) → *Replace / Skip*.
+   - **name taken by a different account** → *Rename / Overwrite / Skip*.
+   - default **Skip**.
+5. Write files `0600`; timestamp-backup anything overwritten first; validate JSON
+   (`validate_codex_auth` / Claude blob shape) before writing; reconcile the
+   active pointer if needed.
+
+### Security / Rules
+
+- Never write the blob or any token to logs or stdout except the explicit export.
+- Files `0600`, directories `0700`.
+- Expiry is checked against the local clock (note: wrong clock can mis-expire).
+- Corrupt/expired/foreign blob must fail without touching existing data.
+
+### Acceptance Tests
+
+- Round-trip: export N accounts → import into a clean data dir → files valid and
+  identical; identity dedup intact.
+- Expired blob (`created_at` older than 3d) is refused, no changes.
+- Corrupt / truncated / wrong-magic / wrong-version blob refused with a clear
+  message, no changes.
+- Duplicate by identity → both Replace and Skip paths verified.
+- Name collision with a different identity → Rename / Overwrite / Skip verified.
+- Malformed account `data` rejected before writing.
+- Both transports (file and string) round-trip; clipboard copy is best-effort.
+- Blob/tokens never appear in logs.
+
+### Commit Scope
+
+- New module `lib/aic/transfer.sh` (envelope encode/decode + export/import flows).
+- Wire `Export accounts` / `Import accounts` into the account-management menu
+  (`lib/aic/ui.sh` → `manage_account_menu`).
+- `tests/test.sh`, `README.md`, `spec-upgrade.md`. One feature per commit.
+
+Suggested commit message:
+
+```text
+Add encrypted account export/import transfer
+```
+
 ## Suggested Implementation Order
 
 1. Robust force-close process tree.
-2. Slim Codex export/import.
+2. ~~Slim Codex export/import~~ — superseded by §7.
 3. Built-in Codex OAuth login with browser PKCE.
 4. Codex account metadata.
 5. Privacy mask mode.
-6. Full encrypted backup/export.
+6. ~~Full encrypted backup/export~~ — superseded by §7.
+7. Account export/import (§7) — encrypted transfer, accounts only, self-expiring.
 
 Reasoning:
 
