@@ -490,27 +490,27 @@ Green means low usage, yellow means at least 70% used, and red means at least
 90% used. Reset times use Asia/Bangkok unless changed in config.json.
 
 ADD A CODEX ACCOUNT
-From the menu choose "Add Codex account", then one of:
+Choose "Add account -> Codex", then one of:
   Login with browser    - opens Codex OAuth in a temporary CODEX_HOME
   Save current session  - saves the current ~/.codex/auth.json
   Import from file or paste - paste the JSON, a file path, or the clipboard
 Enter a short name such as personal or company. To bring an account from
 another computer, copy its auth.json over and use "Import from file or paste".
 
-SWITCH OR OPEN CODEX
+SWITCH CODEX
 Choose "Switch account -> Codex account", pick one, and press Enter; Account
-Center atomically replaces ~/.codex/auth.json. "Open active Codex" starts the
-CLI with the active account.
+Center atomically replaces ~/.codex/auth.json. To run Codex with the active
+account afterward, just run `codex` in your terminal.
 
 Do not switch accounts while another Codex CLI process is still running.
 
 LAUNCH WITH A MODEL PROFILE
-"Open Codex with model" / "Open Claude with model" launch the CLI against an
-alternate provider/model (for example DeepSeek). Add or remove profiles from
-the same menu ("+ Add new profile" / "Manage profiles").
+"Open with model -> Codex / Claude" launches the CLI against an alternate
+provider/model (for example DeepSeek). Add or remove profiles from the same
+menu ("+ Add new profile" / "Manage profiles").
 
 ADD A CLAUDE ACCOUNT
-From "Add Claude account":
+Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
   Import current login  - import an existing Claude Code login
   Add token manually    - store a setup-token or OAuth token
@@ -580,26 +580,27 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 ตั้งแต่ 90% เวลา reset แสดงเป็น Asia/Bangkok เว้นแต่แก้ใน config.json
 
 เพิ่มบัญชี CODEX
-จากเมนูเลือก "Add Codex account" แล้วเลือกอย่างใดอย่างหนึ่ง:
+เลือก "Add account -> Codex" แล้วเลือกอย่างใดอย่างหนึ่ง:
   Login with browser        - เปิด Codex OAuth ใน CODEX_HOME ชั่วคราว
   Save current session      - บันทึก ~/.codex/auth.json ปัจจุบัน
   Import from file or paste - แปะ JSON, ใส่ path ไฟล์ หรือใช้ clipboard
 ตั้งชื่อสั้น ๆ เช่น personal หรือ company ถ้าจะย้ายบัญชีจากอีกเครื่อง ให้ copy
 ไฟล์ auth.json มา แล้วใช้ "Import from file or paste"
 
-สลับหรือเปิด CODEX
+สลับ CODEX
 เลือก "Switch account -> Codex account" เลือกบัญชีแล้วกด Enter ระบบจะเปลี่ยน
-~/.codex/auth.json แบบ atomic จากนั้นเลือก "Open active Codex" เพื่อเปิด CLI
+~/.codex/auth.json แบบ atomic จะเปิด Codex ด้วยบัญชีที่ active ก็รันคำสั่ง `codex`
+ได้เลย
 
 อย่าสลับบัญชีขณะที่ยังมี Codex CLI process อื่นกำลังทำงานอยู่
 
 เปิดด้วย MODEL PROFILE
-"Open Codex with model" / "Open Claude with model" เปิด CLI โดยใช้ provider/model
+"Open with model -> Codex / Claude" เปิด CLI โดยใช้ provider/model
 อื่น (เช่น DeepSeek) เพิ่มหรือลบ profile ได้จากเมนูเดียวกัน
 ("+ Add new profile" / "Manage profiles")
 
 เพิ่มบัญชี CLAUDE
-จาก "Add Claude account":
+เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
   Import current login  - ใช้ login ที่ Claude Code มีอยู่แล้ว
   Add token manually    - เก็บ setup-token หรือ OAuth token ด้วยตัวเอง
@@ -806,7 +807,7 @@ interactive_config_editor() {
 }
 
 interactive_menu() {
-  local name active_name open_label sched_label
+  local name sched_label action sub prov
   start_background_refresh_for_tui
   while true; do
     reconcile_active_codex
@@ -817,37 +818,24 @@ interactive_menu() {
     refresh_status_line
     printf '\n'
 
-    active_name="$(active_codex_name)"
-    if [[ -n "$active_name" ]]; then
-      open_label="Open active Codex  [$active_name]"
-    else
-      open_label="Open active Codex"
-    fi
-
     sched_label="Settings  ($(next_refresh_countdown))"
 
-    local action
     action="$(
       AIC_REDRAW_ON_REFRESH_DONE=1 choose_from "Action" \
         "$(menu_item codex-switch "Switch account →" switch-account)" \
-        "$(menu_item codex-open "$open_label" codex-open)" \
-        "$(menu_item model-launch "Open Codex with model →" codex-model-launch)" \
-        "$(menu_item model-launch "Open Claude with model →" model-launch)" \
-        "$(menu_item add-codex "Add Codex account →" add-codex)" \
-        "$(menu_item add-claude "Add Claude account →" add-claude)" \
+        "$(menu_item model-launch "Open with model →" model-launch)" \
+        "$(menu_item add-codex "Add account →" add-account)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
         "$(menu_item manage "Manage accounts" manage)" \
         "$(menu_item transfer "Export / Import accounts →" transfer)" \
         "$(menu_item schedule "$sched_label" settings)" \
-        "$(menu_item help "Help / คู่มือ" help)" \
-        "$(menu_item exit "Exit" exit)"
+        "$(menu_item help "Help / คู่มือ" help)"
     )" || return 0
     [[ "$action" == "__AIC_REDRAW__" ]] && continue
     action="${action##*::}"
 
     case "$action" in
       switch-account)
-        local sub
         sub="$(choose_from "Switch account" \
           "$(menu_item codex-switch "Codex account" switch-codex)" \
           "$(menu_item claude-switch "Claude account" switch-claude)" \
@@ -858,64 +846,51 @@ interactive_menu() {
           switch-claude) interactive_claude_use ;;
         esac
         ;;
-      codex-open) exec codex ;;
-      codex-model-launch) interactive_codex_model_launch ;;
-      model-launch) interactive_model_launch ;;
-      add-codex)
-        local sub
-        sub="$(choose_from "Add Codex account" \
-          "$(menu_item codex-login "Login with browser" codex-login)" \
-          "$(menu_item codex-add  "Save current session" codex-add-current)" \
-          "$(menu_item codex-import "Import from file or paste" codex-import)" \
+      model-launch)
+        prov="$(choose_from "Open with model" \
+          "$(menu_item codex-switch "Codex" codex)" \
+          "$(menu_item claude-switch "Claude" claude)" \
         )" || continue
-        sub="${sub##*::}"
-        case "$sub" in
-          codex-login)
-            printf 'Account name: '
-            IFS= read -r name
-            with_lock login_codex_browser "$name"
-            ;;
-          codex-add-current)
-            printf 'Account name: '
-            IFS= read -r name
-            with_lock save_live_codex_as "$name"
-            ;;
-          codex-import)
-            printf 'Account name: '
-            IFS= read -r name
-            with_lock import_codex_auth_json "$name"
-            ;;
+        prov="${prov##*::}"
+        case "$prov" in
+          codex) interactive_codex_model_launch ;;
+          claude) interactive_model_launch ;;
         esac
         ;;
-      add-claude)
-        local sub
-        sub="$(choose_from "Add Claude account" \
-          "$(menu_item claude-login "Login with OAuth" claude-login)" \
-          "$(menu_item claude-import "Import current login" claude-import)" \
-          "$(menu_item claude-token "Add token manually" claude-add-token)" \
+      add-account)
+        prov="$(choose_from "Add account" \
+          "$(menu_item add-codex "Codex" codex)" \
+          "$(menu_item add-claude "Claude" claude)" \
         )" || continue
-        sub="${sub##*::}"
-        case "$sub" in
-          claude-login)
-            printf 'Account name: '
-            IFS= read -r name
-            login_claude "$name"
-            ;;
-          claude-import)
-            printf 'Account name: '
-            IFS= read -r name
-            import_current_claude "$name"
-            ;;
-          claude-add-token)
-            printf 'Account name: '
-            IFS= read -r name
-            add_claude_token "$name"
-            ;;
-        esac
+        prov="${prov##*::}"
+        if [[ "$prov" == "codex" ]]; then
+          sub="$(choose_from "Add Codex account" \
+            "$(menu_item codex-login "Login with browser" codex-login)" \
+            "$(menu_item codex-add  "Save current session" codex-add-current)" \
+            "$(menu_item codex-import "Import from file or paste" codex-import)" \
+          )" || continue
+          sub="${sub##*::}"
+          case "$sub" in
+            codex-login) printf 'Account name: '; IFS= read -r name; with_lock login_codex_browser "$name" ;;
+            codex-add-current) printf 'Account name: '; IFS= read -r name; with_lock save_live_codex_as "$name" ;;
+            codex-import) printf 'Account name: '; IFS= read -r name; with_lock import_codex_auth_json "$name" ;;
+          esac
+        else
+          sub="$(choose_from "Add Claude account" \
+            "$(menu_item claude-login "Login with OAuth" claude-login)" \
+            "$(menu_item claude-import "Import current login" claude-import)" \
+            "$(menu_item claude-token "Add token manually" claude-add-token)" \
+          )" || continue
+          sub="${sub##*::}"
+          case "$sub" in
+            claude-login) printf 'Account name: '; IFS= read -r name; login_claude "$name" ;;
+            claude-import) printf 'Account name: '; IFS= read -r name; import_current_claude "$name" ;;
+            claude-add-token) printf 'Account name: '; IFS= read -r name; add_claude_token "$name" ;;
+          esac
+        fi
         ;;
       manage) manage_account_menu ;;
       transfer)
-        local sub
         sub="$(choose_from "Export / Import accounts" \
           "$(menu_item export "Export accounts (to file or string)" export)" \
           "$(menu_item import "Import accounts (from file or string)" import)" \
@@ -929,7 +904,6 @@ interactive_menu() {
       refresh-all) refresh_all || true ;;
       settings) interactive_config_editor ;;
       help) interactive_help ;;
-      exit) return 0 ;;
     esac
     printf '\n%sPress Enter to return to the dashboard...%s' "$DIM" "$RESET"
     IFS= read -r _ </dev/tty

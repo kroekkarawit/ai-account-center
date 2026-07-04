@@ -100,7 +100,7 @@ the menu warns you and offers to close running sessions.
 
 ### Add a Codex account
 
-**Add Codex account →**
+**Add account → Codex**
 
 - **Login with browser** — runs `codex login` in a temporary `CODEX_HOME` and
   saves the result, leaving your active `~/.codex/auth.json` untouched.
@@ -113,7 +113,7 @@ the menu warns you and offers to close running sessions.
 
 ### Add a Claude account
 
-**Add Claude account →**
+**Add account → Claude**
 
 - **Login with OAuth** — full Claude subscription OAuth (needed for usage
   monitoring), imported automatically.
@@ -123,9 +123,9 @@ the menu warns you and offers to close running sessions.
 
 ### Launch with a model profile
 
-**Open Codex with model / Open Claude with model** launch the respective CLI
-against an alternate provider/model (for example DeepSeek). From the same
-picker you can **+ Add new profile** or **Manage profiles** (remove). Profiles
+**Open with model → Codex / Claude** launches the respective CLI against an
+alternate provider/model (for example DeepSeek). From the same picker you can
+**+ Add new profile** or **Manage profiles** (remove). Profiles
 store a base URL, API key, and per-tier model names, and are applied via
 environment variables at launch.
 
