@@ -198,7 +198,12 @@ refresh_claude_account() {
       five_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-5h-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
       week_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-7d-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
 
-      if [[ "$http_code" =~ ^2 && -n "$five_util" && -n "$week_util" ]]; then
+      # Anthropic returns the unified rate-limit headers on BOTH 2xx and 429
+      # responses. When a window is exhausted the probe is rejected with 429,
+      # but the headers still report utilization (~1.0) and the reset time — so
+      # trust them regardless of status instead of showing a hard "ERR". An
+      # account at 100% then displays as full + reset time, not an error.
+      if [[ -n "$five_util" && -n "$week_util" ]]; then
         usage="$(
           jq -n \
             --arg five "$five_util" \
@@ -207,11 +212,11 @@ refresh_claude_account() {
             --argjson week_reset "${week_reset:-null}" \
             '{
               five_hour:{
-                utilization:(($five | tonumber) * 100),
+                utilization:([(($five | tonumber) * 100), 100] | min),
                 resets_at_epoch:$five_reset
               },
               seven_day:{
-                utilization:(($week | tonumber) * 100),
+                utilization:([(($week | tonumber) * 100), 100] | min),
                 resets_at_epoch:$week_reset
               }
             }'
@@ -219,6 +224,9 @@ refresh_claude_account() {
         source_type="inference_headers"
       else
         message="$(jq -r '.error.message // .message // empty' "$body" 2>/dev/null)"
+        if [[ "$http_code" == "429" || "$message" == *"rate limit"* || "$message" == *"exceed"* ]]; then
+          message="Rate limit reached (account at 100%); no utilization headers returned. Try again after the window resets."
+        fi
         [[ -n "$message" ]] ||
           message="Claude probe failed (HTTP ${http_code:-unknown}); rate-limit headers were missing."
         write_error_usage claude "$name" "$message"

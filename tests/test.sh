@@ -388,6 +388,76 @@ test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "inferenc
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "94"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "88"
 
+# At 100% usage the probe is rejected with HTTP 429, but Anthropic still returns
+# the rate-limit headers. Those must be trusted (100% used + reset), not shown
+# as an error.
+cat >"$TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *"/api/oauth/usage"* ]]; then
+  printf '%s\n' '{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}'
+  exit 0
+fi
+headers=""
+body=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -D) headers="$2"; shift 2 ;;
+    -o) body="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat >"$headers" <<'HEADERS'
+HTTP/2 429
+anthropic-ratelimit-unified-5h-status: rejected
+anthropic-ratelimit-unified-5h-reset: 1781506200
+anthropic-ratelimit-unified-5h-utilization: 1.0
+anthropic-ratelimit-unified-7d-status: allowed
+anthropic-ratelimit-unified-7d-reset: 1781942400
+anthropic-ratelimit-unified-7d-utilization: 0.5
+HEADERS
+printf '%s\n' '{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account rate limit."}}' >"$body"
+printf '429'
+SH
+chmod +x "$TMP/bin/curl"
+
+"$ROOT/bin/aic" refresh claude personal
+test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-personal.json")" = "ok"
+test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "inference_headers"
+test "$(jq -r '.limits.five_hour.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "100"
+test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "0"
+test "$(jq -r '.limits.weekly.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "50"
+
+# Restore the 94/88 usage record so later status assertions are unaffected.
+cat >"$TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *"/api/oauth/usage"* ]]; then
+  printf '%s\n' '{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}'
+  exit 0
+fi
+headers=""
+body=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -D) headers="$2"; shift 2 ;;
+    -o) body="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat >"$headers" <<'HEADERS'
+HTTP/2 200
+anthropic-ratelimit-unified-5h-reset: 1781506200
+anthropic-ratelimit-unified-5h-utilization: 0.06
+anthropic-ratelimit-unified-7d-reset: 1781942400
+anthropic-ratelimit-unified-7d-utilization: 0.12
+HEADERS
+printf '%s\n' '{"content":[{"type":"text","text":"1"}]}' >"$body"
+printf '200'
+SH
+chmod +x "$TMP/bin/curl"
+
+"$ROOT/bin/aic" refresh claude personal
+test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "94"
+
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "[5h"
 assert_contains "$output" "13:47]"
