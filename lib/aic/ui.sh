@@ -889,7 +889,7 @@ interactive_menu() {
           sub="$(choose_from "Add Claude account" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \
-            "$(menu_item claude-token "Add token manually" claude-add-token)" \
+            "$(menu_item claude-token "Add token manually (from setup-token)" claude-add-token)" \
           )" || continue
           sub="${sub##*::}"
           case "$sub" in
