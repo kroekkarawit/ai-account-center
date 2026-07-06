@@ -558,9 +558,13 @@ recommendation_reason() {
   printf '%s' "$reason_text"
 }
 
-score_codex_account() {
-  local name="$1" usage now status five week reset5 resetw checked checked_epoch stale=0
-  usage="$(usage_file codex "$name")"
+# Account scoring / recommendations. The math is provider-agnostic — every
+# account has a 5-hour window and a weekly window in the same usage-file shape —
+# so score_account works for both Codex and Claude. The per-provider wrappers
+# below only bind the provider namespace (usage files + <provider>_names).
+score_account() {
+  local provider="$1" name="$2" usage now status five week reset5 resetw checked checked_epoch stale=0
+  usage="$(usage_file "$provider" "$name")"
   now="$(date +%s)"
 
   if [[ ! -f "$usage" ]]; then
@@ -622,28 +626,35 @@ score_codex_account() {
     }'
 }
 
-codex_recommendations() {
-  local name
+score_codex_account() { score_account codex "$1"; }
+score_claude_account() { score_account claude "$1"; }
+
+provider_recommendations() {
+  local provider="$1" name
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
-    score_codex_account "$name"
-  done < <(codex_names) | sort -t $'\t' -k2,2nr
+    score_account "$provider" "$name"
+  done < <("${provider}_names") | sort -t $'\t' -k2,2nr
 }
 
-best_codex_recommendation() {
-  codex_recommendations | head -1
-}
+codex_recommendations() { provider_recommendations codex; }
+claude_recommendations() { provider_recommendations claude; }
 
-print_codex_recommendation_bar() {
-  local best name score reset5_hours resetw_hours stale usage five week reason label
-  best="$(best_codex_recommendation)"
+best_codex_recommendation() { codex_recommendations | head -1; }
+best_claude_recommendation() { claude_recommendations | head -1; }
+
+print_recommendation_bar() {
+  local provider="$1" label="$2"
+  local best best_fn name score reset5_hours resetw_hours stale usage five week reason rec_label
+  best_fn="best_${provider}_recommendation"
+  best="$("$best_fn")"
   [[ -n "$best" ]] || {
-    printf '%sRecommendation%s\n  No Codex accounts found.\n\n' "$BOLD" "$RESET"
+    printf '%sRecommendation%s\n  No %s accounts found.\n\n' "$BOLD" "$RESET" "$label"
     return 0
   }
 
   IFS=$'\t' read -r name score reset5_hours resetw_hours stale <<<"$best"
-  usage="$(usage_file codex "$name")"
+  usage="$(usage_file "$provider" "$name")"
   if [[ -f "$usage" ]]; then
     five="$(jq -r '.limits.five_hour.used_percent // "-"' "$usage")"
     week="$(jq -r '.limits.weekly.used_percent // "-"' "$usage")"
@@ -656,16 +667,19 @@ print_codex_recommendation_bar() {
   else
     reason="refresh usage first"
   fi
-  label="$(recommendation_label "$score")"
+  rec_label="$(recommendation_label "$score")"
 
   printf '%sRecommendation%s\n' "$BOLD" "$RESET"
-  printf '  Best now: %s%s%s  (%s, score %s/100)\n' "$CYAN" "$name" "$RESET" "$label" "$score"
+  printf '  Best now: %s%s%s  (%s, score %s/100)\n' "$CYAN" "$name" "$RESET" "$rec_label" "$score"
   printf '  Reason: %s\n\n' "$reason"
 }
 
-codex_choice_label() {
-  local name="$1" best_name="$2" score="$3" usage five week reset5 resetw label suffix
-  usage="$(usage_file codex "$name")"
+print_codex_recommendation_bar() { print_recommendation_bar codex Codex; }
+print_claude_recommendation_bar() { print_recommendation_bar claude Claude; }
+
+account_choice_label() {
+  local provider="$1" name="$2" best_name="$3" score="$4" usage five week reset5 resetw label suffix
+  usage="$(usage_file "$provider" "$name")"
   suffix=""
   [[ "$name" == "$best_name" ]] && suffix="  ★ best"
   label="$(recommendation_label "$score")"
@@ -688,19 +702,26 @@ codex_choice_label() {
     "$name" "$five" "$reset5" "$week" "$resetw" "$label" "$suffix"
 }
 
-print_codex_recommendations() {
-  local best best_name line name score reset5_hours resetw_hours stale
-  print_codex_recommendation_bar
-  best="$(best_codex_recommendation)"
+codex_choice_label() { account_choice_label codex "$1" "$2" "$3"; }
+claude_choice_label() { account_choice_label claude "$1" "$2" "$3"; }
+
+print_recommendations() {
+  local provider="$1" label="$2" best best_fn best_name name score reset5_hours resetw_hours stale
+  print_recommendation_bar "$provider" "$label"
+  best_fn="best_${provider}_recommendation"
+  best="$("$best_fn")"
   best_name="${best%%$'\t'*}"
   printf '%sAccounts%s\n' "$BOLD" "$RESET"
   while IFS=$'\t' read -r name score reset5_hours resetw_hours stale; do
     [[ -n "$name" ]] || continue
     printf '  '
-    codex_choice_label "$name" "$best_name" "$score"
+    account_choice_label "$provider" "$name" "$best_name" "$score"
     printf '\n'
-  done < <(codex_recommendations)
+  done < <("${provider}_recommendations")
 }
+
+print_codex_recommendations() { print_recommendations codex Codex; }
+print_claude_recommendations() { print_recommendations claude Claude; }
 
 uppercase() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'

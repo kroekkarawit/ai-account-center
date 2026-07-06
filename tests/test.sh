@@ -394,6 +394,21 @@ test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "inferenc
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "94"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "88"
 
+# Claude recommendation/scoring — parity with Codex. Add a heavily-used second
+# account; the lightly-used one must win and be marked best.
+printf 'claude-work-token\n' | add_claude_token work >/dev/null
+jq '.account = "work" |
+    .limits.five_hour.used_percent = 82 |
+    .limits.weekly.used_percent = 91 |
+    .limits.five_hour.remaining_percent = 18 |
+    .limits.weekly.remaining_percent = 9' \
+  "$AIC_DATA_DIR/usage/claude-personal.json" >"$AIC_DATA_DIR/usage/claude-work.json"
+output="$(print_claude_recommendations)"
+assert_contains "$output" "Best now: personal"
+assert_contains "$output" "★ best"
+test "$(best_claude_recommendation | cut -f1)" = "personal"
+rm -f "$AIC_DATA_DIR/accounts/claude/work.json" "$AIC_DATA_DIR/usage/claude-work.json"
+
 # At 100% usage the probe is rejected with HTTP 429, but Anthropic still returns
 # the rate-limit headers. Those must be trusted (100% used + reset), not shown
 # as an error.

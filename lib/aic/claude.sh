@@ -256,14 +256,19 @@ switch_claude_impl() {
 }
 
 interactive_claude_use() {
-  local options=() name item has_oauth suffix
-  while IFS= read -r name; do
+  local options=() best best_name name score reset5_hours resetw_hours stale item label has_oauth
+  print_claude_recommendation_bar
+  best="$(best_claude_recommendation)"
+  best_name="${best%%$'\t'*}"
+  while IFS=$'\t' read -r name score reset5_hours resetw_hours stale; do
     [[ -n "$name" ]] || continue
+    label="$(claude_choice_label "$name" "$best_name" "$score")"
+    # Token-only (setup-token) accounts have no OAuth refresh token, so they can
+    # be scored/ranked but not switched to — flag them and guard on select below.
     has_oauth="$(jq -r '.claudeAiOauth.refreshToken // empty' "$(claude_account_file "$name")" 2>/dev/null)"
-    suffix=""
-    [[ -z "$has_oauth" ]] && suffix="  (token-only, re-import to enable switch)"
-    options+=("$name$suffix::$name")
-  done < <(claude_names)
+    [[ -z "$has_oauth" ]] && label="$label  (token-only)"
+    options+=("$label::$name")
+  done < <(claude_recommendations)
   [[ "${#options[@]}" -gt 0 ]] || { warn "No Claude accounts have been added."; return 1; }
   item="$(choose_from "Select Claude account" "${options[@]}")" || return 1
   name="${item##*::}"
