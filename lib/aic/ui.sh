@@ -99,12 +99,19 @@ manage_account_menu() {
       "⇢  Re-import auth.json::reimport"
       "×  Remove::remove"
     )
-  else
+  elif [[ "$(claude_account_kind "$name")" == "oauth" ]]; then
     sub_options=(
-      "◆  Switch to this account::switch"
+      "◆  Switch to this account (global)::switch"
       "↻  Refresh this account::refresh"
       "✎  Rename::rename"
       "◇  Re-login OAuth::relogin"
+      "×  Remove::remove"
+    )
+  else
+    sub_options=(
+      "▶  Open with model (launch this session)::launch-token"
+      "↻  Refresh this account::refresh"
+      "✎  Rename::rename"
       "◈  Update setup-token::update-token"
       "×  Remove::remove"
     )
@@ -151,6 +158,9 @@ manage_account_menu() {
       ;;
     update-token)
       add_claude_token "$name"
+      ;;
+    launch-token)
+      launch_claude_with_token "$name"
       ;;
     remove)
       local answer
@@ -504,25 +514,30 @@ account afterward, just run `codex` in your terminal.
 
 Do not switch accounts while another Codex CLI process is still running.
 
-LAUNCH WITH A MODEL PROFILE
-"Open with model -> Codex / Claude" launches the CLI against an alternate
-provider/model (for example DeepSeek). Add or remove profiles from the same
-menu ("+ Add new profile" / "Manage profiles").
+ACCOUNTS vs SETUP-TOKENS  (Claude)
+  Account (OAuth login)  - has a refresh token; switches GLOBALLY (written to
+                           the keychain, so every terminal + VS Code + extension
+                           uses it). Add under "Add account -> Claude".
+  Setup-token            - a session credential like an API key. Full Claude
+                           (Opus/Sonnet, subagents, all tools) but only for the
+                           session you launch with it; other clients are
+                           untouched. Add/run under "Open with model -> Claude".
 
-ADD A CLAUDE ACCOUNT
+ADD A CLAUDE ACCOUNT (global switch)
 Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
   Import current login  - import an existing Claude Code login
-  Add setup-token manually
-                        - store a setup-token or OAuth token from
-                          `claude setup-token`
+Both capture the refresh token, so the account switches across all clients.
 
-To get a Claude setup token, run `claude setup-token` in another terminal,
-authenticate in the browser, then copy the shown `sk-ant-oat01-...` token back
-into Account Center. The token is shown only once by Claude Code.
+OPEN WITH MODEL  (per-session)
+"Open with model -> Codex / Claude" launches the CLI for one session against a
+chosen credential. For Claude this lists your setup-tokens (launched via
+CLAUDE_CODE_OAUTH_TOKEN) and any alternate-provider model profiles (DeepSeek /
+custom). Add a setup-token with "+ Add Claude setup-token"; get one by running
+`claude setup-token` in another terminal (shown once as `sk-ant-oat01-...`).
 
 MONITORING
-"Refresh all usage" updates every stored account.
+"Refresh all usage" updates every stored account, including setup-tokens.
 Codex usage is read from account/rateLimits/read without an inference prompt.
 Claude full OAuth uses its usage endpoint. An inference-only setup-token uses a
 one-output-token Haiku request and reads utilization from response headers.
@@ -600,25 +615,29 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 
 อย่าสลับบัญชีขณะที่ยังมี Codex CLI process อื่นกำลังทำงานอยู่
 
-เปิดด้วย MODEL PROFILE
-"Open with model -> Codex / Claude" เปิด CLI โดยใช้ provider/model
-อื่น (เช่น DeepSeek) เพิ่มหรือลบ profile ได้จากเมนูเดียวกัน
-("+ Add new profile" / "Manage profiles")
+บัญชี vs SETUP-TOKEN  (Claude)
+  บัญชี (OAuth login) - มี refresh token สลับได้ระดับ GLOBAL (เขียนลง keychain
+                        ทุก terminal + VS Code + extension จะใช้บัญชีนี้)
+                        เพิ่มที่ "Add account -> Claude"
+  Setup-token         - เป็น session credential เหมือน API key ใช้ Claude ได้เต็ม
+                        (Opus/Sonnet, subagent, ทุก tool) แต่เฉพาะ session ที่เปิด
+                        เท่านั้น client อื่นไม่กระทบ เพิ่ม/เปิดที่
+                        "Open with model -> Claude"
 
-เพิ่มบัญชี CLAUDE
+เพิ่มบัญชี CLAUDE (สลับระดับ global)
 เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
   Import current login  - ใช้ login ที่ Claude Code มีอยู่แล้ว
-  Add setup-token manually
-                        - เก็บ setup-token หรือ OAuth token จาก
-                          `claude setup-token`
+ทั้งสองเก็บ refresh token บัญชีจึงสลับได้ทุก client
 
-ถ้าต้องการ setup token ให้รัน `claude setup-token` ใน terminal อีกหน้าต่าง
-กดยืนยันใน browser แล้ว copy token ที่ขึ้นต้นด้วย `sk-ant-oat01-...` กลับมา
-ใส่ใน Account Center. Claude Code จะแสดง token นี้เพียงครั้งเดียว
+เปิดด้วย MODEL / SETUP-TOKEN  (เฉพาะ session)
+"Open with model -> Codex / Claude" เปิด CLI หนึ่ง session ด้วย credential ที่เลือก
+ฝั่ง Claude จะลิสต์ setup-token (เปิดผ่าน CLAUDE_CODE_OAUTH_TOKEN) และ model profile
+ของ provider อื่น (DeepSeek/custom) เพิ่ม setup-token ด้วย "+ Add Claude setup-token"
+ขอ token โดยรัน `claude setup-token` (แสดงครั้งเดียวเป็น `sk-ant-oat01-...`)
 
 การ MONITOR
-"Refresh all usage" อัปเดตข้อมูลทุกบัญชี
+"Refresh all usage" อัปเดตข้อมูลทุกบัญชี รวมถึง setup-token
 Codex อ่าน account/rateLimits/read โดยไม่ยิง inference prompt
 Claude full OAuth ใช้ usage endpoint ส่วน setup-token จะยิง Haiku ที่ output
 หนึ่ง token แล้วอ่าน utilization จาก response headers
@@ -866,7 +885,7 @@ interactive_menu() {
         prov="${prov##*::}"
         case "$prov" in
           codex) interactive_codex_model_launch ;;
-          claude) interactive_model_launch ;;
+          claude) interactive_claude_launch ;;
         esac
         ;;
       add-account)
@@ -888,16 +907,16 @@ interactive_menu() {
             codex-import) printf 'Account name: '; IFS= read -r name; with_lock import_codex_auth_json "$name" ;;
           esac
         else
-          sub="$(choose_from "Add Claude account" \
+          # Accounts here are OAuth logins only — they switch globally (keychain).
+          # Setup-tokens are session credentials: add them under Open with model.
+          sub="$(choose_from "Add Claude account (global switch)" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \
-            "$(menu_item claude-token "Add setup-token manually" claude-add-token)" \
           )" || continue
           sub="${sub##*::}"
           case "$sub" in
             claude-login) printf 'Account name: '; IFS= read -r name; login_claude "$name" ;;
             claude-import) printf 'Account name: '; IFS= read -r name; import_current_claude "$name" ;;
-            claude-add-token) printf 'Account name: '; IFS= read -r name; add_claude_token "$name" ;;
           esac
         fi
         ;;

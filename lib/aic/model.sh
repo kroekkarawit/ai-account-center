@@ -259,8 +259,39 @@ manage_model_profiles() {
   esac
 }
 
-interactive_model_launch() {
-  interactive_model_launch_for claude
+# Open with model → Claude. Launches a per-session Claude with either a
+# setup-token (CLAUDE_CODE_OAUTH_TOKEN, full first-party subscription) or a
+# third-party model profile (DeepSeek/custom via ANTHROPIC_BASE_URL).
+interactive_claude_launch() {
+  local options=() name display base file item key badge
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    badge="$(claude_token_usage_badge "$name")"
+    options+=("$name  —  setup-token${badge:+  $badge}::tok:$name")
+  done < <(claude_token_names)
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    file="$(model_profile_file "$name")"
+    display="$(jq -r '.display_name // .name' "$file" 2>/dev/null)"
+    base="$(jq -r '.base_url // ""' "$file" 2>/dev/null)"; base="${base#https://}"; base="${base%%/*}"
+    options+=("$name  —  $display ($base)::prof:$name")
+  done < <(model_profile_names)
+
+  options+=("＋ Add Claude setup-token::__addtok__")
+  options+=("＋ Add model profile (other provider)::__addprof__")
+  options+=("⚙ Manage model profiles::__manage__")
+
+  item="$(choose_from "Open Claude with…" "${options[@]}")" || return 1
+  key="${item##*::}"
+  case "$key" in
+    __addtok__)  printf 'Name for this setup-token: '; IFS= read -r name; add_claude_token "$name" ;;
+    __addprof__) add_model_profile ;;
+    __manage__)  manage_model_profiles ;;
+    tok:*)  launch_claude_with_token "${key#tok:}" ;;
+    prof:*) launch_with_profile "${key#prof:}" ;;
+  esac
 }
 
 interactive_codex_model_launch() {

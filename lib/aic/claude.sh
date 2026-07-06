@@ -43,10 +43,89 @@ sanitize_claude_token() {
   printf '%s' "$1" | tr -d '[:space:][:cntrl:]'
 }
 
+# Two kinds of Claude account share CLAUDE_ACCOUNTS_DIR:
+#   "oauth" — a full browser login with a refreshToken. Only these can be
+#             switched globally (written to the keychain so every client picks
+#             them up), because the keychain rejects refresh-token-less creds.
+#   "token" — a setup-token (`claude setup-token`). A session credential like an
+#             API key: full Claude, but only per-launch via CLAUDE_CODE_OAUTH_TOKEN.
+claude_account_kind() {
+  local file
+  file="$(claude_account_file "$1")"
+  [[ -f "$file" ]] || { printf ''; return; }
+  if [[ -n "$(jq -r '.claudeAiOauth.refreshToken // empty' "$file" 2>/dev/null)" ]]; then
+    printf 'oauth'
+  else
+    printf 'token'
+  fi
+}
+
+claude_oauth_names() {
+  local n
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    [[ "$(claude_account_kind "$n")" == "oauth" ]] && printf '%s\n' "$n"
+  done < <(claude_names)
+}
+
+claude_token_names() {
+  local n
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    [[ "$(claude_account_kind "$n")" == "token" ]] && printf '%s\n' "$n"
+  done < <(claude_names)
+}
+
+# Short "[5h x%  7d y%]" badge from cached usage, for the launcher list.
+claude_token_usage_badge() {
+  local uf
+  uf="$(usage_file claude "$1")"
+  [[ -f "$uf" ]] || return 0
+  if [[ "$(jq -r '.status // ""' "$uf" 2>/dev/null)" != "ok" ]]; then
+    printf '[usage ?]'
+    return 0
+  fi
+  local five week
+  five="$(jq -r '(.limits.five_hour.used_percent // null) | if type=="number" then (round|tostring)+"%" else "?" end' "$uf")"
+  week="$(jq -r '(.limits.weekly.used_percent // null) | if type=="number" then (round|tostring)+"%" else "?" end' "$uf")"
+  printf '[5h %s  7d %s]' "$five" "$week"
+}
+
+# Launch a full Claude session authenticated by a setup-token. Session-scoped:
+# only this process uses the account; the keychain / other clients are untouched.
+launch_claude_with_token() {
+  local name="$1"; shift
+  validate_name "$name"
+  local file token
+  file="$(claude_account_file "$name")"
+  [[ -f "$file" ]] || die "Unknown Claude account: $name"
+  token="$(sanitize_claude_token "$(jq -r '.token // .claudeAiOauth.accessToken // empty' "$file")")"
+  [[ -n "$token" ]] || die "Account '$name' has no usable token."
+  require_command claude
+  printf '%sLaunching Claude  ·  setup-token: %s  ·  this session only (keychain untouched)%s\n' \
+    "$CYAN" "$name" "$RESET"
+  exec env CLAUDE_CODE_OAUTH_TOKEN="$token" claude "$@"
+}
+
 add_claude_token() {
   local name="$1"
   local token="${2:-}"
   validate_name "$name"
+
+  # Never silently clobber an existing account. Overwriting an OAuth login with
+  # a bare setup-token would strip its refresh token and downgrade it from a
+  # global-switchable account to a session-only credential — refuse outright.
+  if [[ -f "$(claude_account_file "$name")" ]]; then
+    if [[ "$(claude_account_kind "$name")" == "oauth" ]]; then
+      die "Account '$name' is a full OAuth login (globally switchable). Adding a setup-token would remove that. Choose another name, or remove '$name' first."
+    fi
+    warn "Setup-token account '$name' already exists; it will be replaced."
+    if [[ -t 0 ]]; then
+      local ans
+      ans="$(choose_from "Overwrite existing setup-token '$name'?" "No, cancel" "Yes, overwrite")" || return 1
+      [[ "$ans" == Yes* ]] || return 1
+    fi
+  fi
 
   if [[ -z "$token" ]]; then
     if [[ ! -t 0 ]]; then
@@ -256,27 +335,28 @@ switch_claude_impl() {
 }
 
 interactive_claude_use() {
-  local options=() best best_name name score reset5_hours resetw_hours stale item label has_oauth
-  print_claude_recommendation_bar
-  best="$(best_claude_recommendation)"
-  best_name="${best%%$'\t'*}"
-  while IFS=$'\t' read -r name score reset5_hours resetw_hours stale; do
+  # Global switch targets are OAuth logins only — they alone carry the refresh
+  # token the keychain requires. Setup-token accounts are launched per-session
+  # from Open with model → Claude, so they are excluded here (ranked by score,
+  # so the first OAuth entry is the best switchable account).
+  local options=() best_name="" name score rest item
+  while IFS=$'\t' read -r name score rest; do
     [[ -n "$name" ]] || continue
-    label="$(claude_choice_label "$name" "$best_name" "$score")"
-    # Token-only (setup-token) accounts have no OAuth refresh token, so they can
-    # be scored/ranked but not switched to — flag them and guard on select below.
-    has_oauth="$(jq -r '.claudeAiOauth.refreshToken // empty' "$(claude_account_file "$name")" 2>/dev/null)"
-    [[ -z "$has_oauth" ]] && label="$label  (token-only)"
-    options+=("$label::$name")
+    [[ "$(claude_account_kind "$name")" == "oauth" ]] || continue
+    [[ -z "$best_name" ]] && best_name="$name"
+    options+=("$(claude_choice_label "$name" "$best_name" "$score")::$name")
   done < <(claude_recommendations)
-  [[ "${#options[@]}" -gt 0 ]] || { warn "No Claude accounts have been added."; return 1; }
-  item="$(choose_from "Select Claude account" "${options[@]}")" || return 1
-  name="${item##*::}"
-  has_oauth="$(jq -r '.claudeAiOauth.refreshToken // empty' "$(claude_account_file "$name")" 2>/dev/null)"
-  [[ -n "$has_oauth" ]] || {
-    warn "Account '$name' has no OAuth credentials. Re-import from the menu: Add Claude account → Import current login."
+
+  if [[ "${#options[@]}" -eq 0 ]]; then
+    warn "No switchable Claude accounts yet. Add one from: Add account → Claude → Login with OAuth."
+    local toks
+    toks="$(claude_token_names | paste -sd', ' -)"
+    [[ -n "$toks" ]] && printf '  Setup-token accounts (%s) run per-session via Open with model → Claude.\n' "$toks" >&2
     return 1
-  }
+  fi
+
+  item="$(choose_from "Switch to Claude account (global — all clients)" "${options[@]}")" || return 1
+  name="${item##*::}"
   switch_claude_impl "$name" confirm
 }
 

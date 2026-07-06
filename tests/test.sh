@@ -409,6 +409,23 @@ assert_contains "$output" "★ best"
 test "$(best_claude_recommendation | cut -f1)" = "personal"
 rm -f "$AIC_DATA_DIR/accounts/claude/work.json" "$AIC_DATA_DIR/usage/claude-work.json"
 
+# Account-kind classification: setup-token vs OAuth login.
+test "$(claude_account_kind personal)" = "token"
+jq -n '{claudeAiOauth:{accessToken:"sk-ant-oat01-a",refreshToken:"sk-ant-ort01-r",expiresAt:0,scopes:["user:inference"]},organizationUuid:"o",created_at:"t"}' \
+  > "$AIC_DATA_DIR/accounts/claude/oauthy.json"
+test "$(claude_account_kind oauthy)" = "oauth"
+test "$(claude_oauth_names | grep -c '^oauthy$')" = "1"
+test "$(claude_token_names | grep -c '^personal$')" = "1"
+test "$(claude_oauth_names | grep -c '^personal$')" = "0"
+
+# Clobber guard: add_claude_token must REFUSE to overwrite an OAuth account
+# (a bare setup-token would strip its refresh token and break global switching).
+if printf 'sk-ant-oat01-new\n' | add_claude_token oauthy >/dev/null 2>&1; then
+  echo "FAIL: add_claude_token overwrote an OAuth account"; exit 1
+fi
+test "$(claude_account_kind oauthy)" = "oauth"
+rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json"
+
 # At 100% usage the probe is rejected with HTTP 429, but Anthropic still returns
 # the rate-limit headers. Those must be trusted (100% used + reset), not shown
 # as an error.

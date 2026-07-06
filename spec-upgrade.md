@@ -8,6 +8,33 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-06 — v0.14.0: Claude accounts vs setup-tokens
+
+Verified against `claude` 2.1.x: the CLI only accepts an OAuth login (with a
+refresh token) from the keychain (`authMethod: claude.ai`); a setup-token is
+rejected there (`authMethod: none`) and authenticates **only** via the
+`CLAUDE_CODE_OAUTH_TOKEN` env var (`authMethod: oauth_token`). So a setup-token
+cannot be switched globally — that is a Claude Code limitation, not ours.
+
+- **Two Claude credential types, cleanly separated.** `claude_account_kind`
+  classifies each stored account as `oauth` (refresh token → globally
+  switchable) or `token` (setup-token → session credential).
+  - **Switch account → Claude** now lists **OAuth accounts only** (they switch
+    globally via the keychain, like Codex).
+  - **Open with model → Claude** now lists **setup-tokens** (launched via
+    `CLAUDE_CODE_OAUTH_TOKEN`, full first-party Claude for that session only)
+    alongside third-party model profiles. `+ Add Claude setup-token` lives here.
+  - **Add account → Claude** offers OAuth login / import only; the setup-token
+    add path moved to Open-with-model.
+- **Clobber guard:** `add_claude_token` refuses to overwrite an existing OAuth
+  account (a bare token would strip its refresh token and break global switch)
+  and confirms before replacing an existing setup-token.
+- **Monitoring unchanged:** setup-token usage is still probed via the Haiku /
+  rate-limit-header path and shown (now also in the launcher list).
+- Setup-tokens expose no account identity (no `user:profile`), so duplicate
+  detection across names is name-based for tokens; OAuth logins expose
+  `email`/`orgId` via `claude auth status --json`.
+
 ### 2026-07-04 — v0.12.0: Modularization + menu-first CLI
 
 - **Refactor:** the single ~3.9k-line `bin/aic` is now a thin entrypoint that

@@ -111,26 +111,41 @@ the menu warns you and offers to close running sessions.
   `Ctrl-D`, or `q`. For very large auth files, importing by path is most
   reliable.
 
+### Accounts vs setup-tokens (Claude)
+
+Claude has two credential types, and they behave differently:
+
+- **Account (OAuth login)** — has a refresh token, so it switches **globally**:
+  the switch writes it to the keychain and every client (terminal, VS Code,
+  extensions) picks it up, just like Codex. Add these under **Add account →
+  Claude**.
+- **Setup-token** — a session credential like an API key. It gives full Claude
+  (Opus/Sonnet, subagents, all tools) but only for the session you launch with
+  it; other clients are untouched. The keychain rejects a setup-token, so it
+  **cannot** switch globally. Add/run these under **Open with model → Claude**.
+
 ### Add a Claude account
 
-**Add account → Claude**
+**Add account → Claude** (global switch):
 
-- **Login with OAuth** — full Claude subscription OAuth (needed for usage
-  monitoring), imported automatically.
+- **Login with OAuth** — full Claude subscription OAuth, imported automatically.
 - **Import current login** — imports an existing Claude Code login.
-- **Add setup-token manually** — stores a `setup-token` or OAuth token with hidden
-  input. To get one, run `claude setup-token`, authenticate in the browser,
-  then copy the shown `sk-ant-oat01-...` token back into Account Center. Claude
-  Code shows this token only once. A `setup-token` is inference-only; see
-  Monitoring below.
 
-### Launch with a model profile
+Both capture the refresh token, so the account switches across all clients.
+Adding a setup-token here is intentionally not offered — it would be a
+session-only credential, not a switchable account.
 
-**Open with model → Codex / Claude** launches the respective CLI against an
-alternate provider/model (for example DeepSeek). From the same picker you can
-**+ Add new profile** or **Manage profiles** (remove). Profiles
-store a base URL, API key, and per-tier model names, and are applied via
-environment variables at launch.
+### Launch with a model profile or setup-token
+
+**Open with model → Codex / Claude** launches the respective CLI for a single
+session. For Claude the picker lists:
+
+- **Setup-tokens** — launched via `CLAUDE_CODE_OAUTH_TOKEN` (full first-party
+  Claude, this session only). **+ Add Claude setup-token** stores one; get it by
+  running `claude setup-token` and copying the shown `sk-ant-oat01-...` value.
+  Their usage is still monitored (see Monitoring) and shown in the picker.
+- **Model profiles** — alternate provider/model (for example DeepSeek), applied
+  via environment variables. **+ Add model profile** / **Manage profiles**.
 
 ### Manage accounts
 
