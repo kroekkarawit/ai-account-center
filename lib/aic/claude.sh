@@ -28,9 +28,19 @@ print_claude_token_instructions() {
   claude_token_box_plain "  2  Approve the browser login."
   claude_token_box_highlight "  3  Paste the " "sk-ant-oat01-..." " token here."
   claude_token_box_plain ""
-  claude_token_box_plain "  Claude shows this token once. Input below is hidden." "$DIM"
+  claude_token_box_plain "  Claude shows this token once. Input is visible so you" "$DIM"
+  claude_token_box_plain "  can confirm it pasted cleanly (no stray characters)." "$DIM"
   printf '%s+------------------------------------------------------------+%s\n' "$CYAN" "$RESET" >&2
   printf '\n' >&2
+}
+
+# Strip whitespace and control bytes (e.g. a stray ESC captured during a paste)
+# from a Claude token. A setup token / OAuth access token is a single run of
+# printable, whitespace-free characters, so this only ever removes corruption.
+# One such byte silently breaks the Authorization header and makes every usage
+# refresh fail with a blank error, so sanitize on both input and read.
+sanitize_claude_token() {
+  printf '%s' "$1" | tr -d '[:space:][:cntrl:]'
 }
 
 add_claude_token() {
@@ -44,10 +54,12 @@ add_claude_token() {
     else
       print_claude_token_instructions
       printf '%sPaste setup token:%s ' "$BOLD" "$RESET" >&2
-      IFS= read -r -s token
-      printf '\n' >&2
+      # Visible input (not -s): the paste is echoed so you can eyeball it before
+      # it is stored. sanitize_claude_token still strips anything unexpected.
+      IFS= read -r token
     fi
   fi
+  token="$(sanitize_claude_token "$token")"
   [[ -n "$token" ]] || die "Claude token cannot be empty."
 
   local destination

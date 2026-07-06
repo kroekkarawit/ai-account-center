@@ -142,6 +142,9 @@ refresh_claude_account() {
   require_command curl
 
   token="$(jq -r '.claudeAiOauth.accessToken // .token // empty' "$source")"
+  # Heal already-stored tokens that captured stray control bytes on paste before
+  # input was sanitized, so an old corrupted account recovers on the next refresh.
+  token="$(sanitize_claude_token "$token")"
   [[ -n "$token" ]] || {
     write_error_usage claude "$name" "Stored Claude token is empty."
     return 1
