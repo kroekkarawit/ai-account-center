@@ -8,6 +8,13 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-06 — v0.14.3: Keep `tee /dev/tty` in the capture command
+
+- The capture command keeps `| tee /dev/tty | … ; echo` so it **prints** the
+  base64 credential (not just a silent `pbcopy`). A silent copy looks like
+  nothing happened; the print is the "it worked" feedback. Applied to
+  `claude_cred_capture_cmd`, the help text (EN/TH), and the README.
+
 ### 2026-07-06 — v0.14.2: Credential-import walkthrough + [c] hotkey
 
 - `print_claude_credential_import_box` — a framed, colored guide for the base64

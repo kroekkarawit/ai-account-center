@@ -36,8 +36,11 @@ print_claude_token_instructions() {
 
 # Single source of truth for the "capture credential on the other Mac" command,
 # used by both the on-screen instructions and the [c] copy-to-clipboard hotkey.
+# `tee /dev/tty` echoes the credential to the screen (and the trailing `echo`
+# adds a newline) so the person running it sees output and knows it worked,
+# rather than a silent clipboard copy that looks like nothing happened.
 claude_cred_capture_cmd() {
-  printf '%s' 'security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | pbcopy'
+  printf '%s' 'security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo'
 }
 
 # A framed, colored walkthrough for importing a Claude credential from another
@@ -77,7 +80,7 @@ print_claude_credential_import_box() {
   printf '  %s1%s  Press %s[c]%s to copy the command  %s(or select the line below)%s\n' \
     "$B" "$R" "$B$G" "$R" "$D" "$R" >&2
   printf '  %s2%s  Run it on the OTHER Mac, or paste it to that person in chat.\n' "$B" "$R" >&2
-  printf '  %s3%s  That copies their Claude credential to the clipboard.\n' "$B" "$R" >&2
+  printf '  %s3%s  It prints the credential (so they see it worked) and copies it.\n' "$B" "$R" >&2
   printf '  %s4%s  Paste the copied credential back here.\n\n' "$B" "$R" >&2
 
   printf '  %scommand to run on the other machine:%s\n' "$D" "$R" >&2

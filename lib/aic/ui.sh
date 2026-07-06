@@ -529,7 +529,8 @@ Choose "Add account -> Claude":
   Import current login  - import this machine's Claude Code login
   Import credential     - paste a base64 credential from another machine:
                           security find-generic-password -s "Claude Code-credentials" \
-                            -w | base64 | tr -d '\n' | pbcopy
+                            -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
+                          (tee /dev/tty prints it so you can see it worked)
 All three capture the refresh token, so the account switches across all clients.
 (The base64 form is plaintext; use Export / Import accounts for an encrypted move.)
 
@@ -634,7 +635,8 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
   Import current login  - ใช้ login ที่ Claude Code มีอยู่บนเครื่องนี้
   Import credential     - วาง base64 credential จากอีกเครื่อง โดยรันบนเครื่องต้นทาง:
                           security find-generic-password -s "Claude Code-credentials" \
-                            -w | base64 | tr -d '\n' | pbcopy
+                            -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
+                          (tee /dev/tty พิมพ์ผลออกมาให้เห็นว่าทำงานสำเร็จ)
 ทั้งสามเก็บ refresh token บัญชีจึงสลับได้ทุก client
 (base64 เป็น plaintext ถ้าต้องการย้ายแบบเข้ารหัสให้ใช้ Export / Import accounts)
 

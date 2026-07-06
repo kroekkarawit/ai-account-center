@@ -134,8 +134,11 @@ Claude has two credential types, and they behave differently:
   captured on another Mac. On that machine run:
 
   ```sh
-  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n' | pbcopy
+  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
   ```
+
+  (`tee /dev/tty` prints the credential so the runner can see it worked; it's
+  also on the clipboard.)
 
   then paste the copied string here. At the prompt, press **`c`** to copy that
   command to your clipboard (to run on the other machine or send in chat). It
