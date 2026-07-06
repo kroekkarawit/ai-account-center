@@ -147,6 +147,60 @@ claude_token_usage_badge() {
 
 # Launch a full Claude session authenticated by a setup-token. Session-scoped:
 # only this process uses the account; the keychain / other clients are untouched.
+# ---- Parallel account sessions ---------------------------------------------
+# Run another Claude account in THIS terminal (its own quota), alongside your
+# global account — e.g. to burn down two accounts at once near a weekly reset.
+# A PID registry (the pid survives exec, so it becomes the launched claude's pid)
+# lets the launcher hide accounts already running, so the same account is never
+# run twice (which would split one quota and, for OAuth, collide on refresh).
+claude_session_pid_file() { printf '%s/sessions/%s.pid' "$RUNTIME_DIR" "$1"; }
+claude_session_config_dir() { printf '%s/sessions/claude-%s' "$DATA_DIR" "$1"; }
+
+register_claude_session() {
+  local f; f="$(claude_session_pid_file "$1")"
+  mkdir -p "$(dirname "$f")" && chmod 700 "$(dirname "$f")" 2>/dev/null || true
+  printf '%s' "$$" >"$f"   # $$ survives exec → becomes the claude process's pid
+}
+
+# 0 if the account has a live parallel session; prunes a dead registration.
+claude_account_in_session() {
+  local f pid; f="$(claude_session_pid_file "$1")"
+  [[ -f "$f" ]] || return 1
+  pid="$(cat "$f" 2>/dev/null)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then return 0; fi
+  rm -f "$f" 2>/dev/null || true
+  return 1
+}
+
+# Accounts eligible to run in parallel: not the global-active account (running it
+# in parallel just splits one quota and risks a refresh collision) and not
+# already running in a session.
+claude_parallel_candidates() {
+  local active name; active="$(active_claude_name)"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" == "$active" ]] && continue
+    claude_account_in_session "$name" && continue
+    printf '%s\n' "$name"
+  done < <(claude_names)
+}
+
+# Seed an isolated CLAUDE_CONFIG_DIR with the account's OAuth credential — only on
+# first use. After that the session dir owns its own (self-refreshing) token
+# chain, so we never overwrite a token the live session has already rotated.
+_seed_claude_session_dir() {
+  local name="$1" dir="$2" oauth
+  mkdir -p "$dir"; chmod 700 "$dir"
+  if [[ ! -f "$dir/.credentials.json" ]]; then
+    oauth="$(jq -c '.claudeAiOauth // empty' "$(claude_account_file "$name")")"
+    [[ -n "$oauth" ]] || die "Account '$name' has no OAuth credentials."
+    jq -n --argjson o "$oauth" '{claudeAiOauth:$o}' >"$dir/.credentials.json"
+    chmod 600 "$dir/.credentials.json"
+  fi
+}
+
+# Parallel session for a setup-token account (static token → no refresh, no
+# collision; safe to run many at once).
 launch_claude_with_token() {
   local name="$1"; shift
   validate_name "$name"
@@ -156,9 +210,35 @@ launch_claude_with_token() {
   token="$(sanitize_claude_token "$(jq -r '.token // .claudeAiOauth.accessToken // empty' "$file")")"
   [[ -n "$token" ]] || die "Account '$name' has no usable token."
   require_command claude
-  printf '%sLaunching Claude  ·  setup-token: %s  ·  this session only (keychain untouched)%s\n' \
+  register_claude_session "$name"
+  printf '%sLaunching Claude  ·  parallel (setup-token): %s  ·  this terminal, own quota%s\n' \
     "$CYAN" "$name" "$RESET"
   exec env CLAUDE_CODE_OAUTH_TOKEN="$token" claude "$@"
+}
+
+# Parallel session for a full OAuth account, isolated via CLAUDE_CONFIG_DIR so it
+# refreshes independently of your global keychain login.
+launch_claude_oauth_session() {
+  local name="$1"; shift
+  validate_name "$name"
+  [[ -f "$(claude_account_file "$name")" ]] || die "Unknown Claude account: $name"
+  require_command claude
+  local dir; dir="$(claude_session_config_dir "$name")"
+  _seed_claude_session_dir "$name" "$dir"
+  register_claude_session "$name"
+  printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota (keychain untouched)%s\n' \
+    "$CYAN" "$name" "$RESET"
+  exec env CLAUDE_CONFIG_DIR="$dir" claude "$@"
+}
+
+# Dispatch a parallel launch by credential kind.
+launch_claude_parallel() {
+  local name="$1"; shift
+  case "$(claude_account_kind "$name")" in
+    token) launch_claude_with_token "$name" "$@" ;;
+    oauth) launch_claude_oauth_session "$name" "$@" ;;
+    *) die "Unknown Claude account: $name" ;;
+  esac
 }
 
 add_claude_token() {

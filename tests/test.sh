@@ -637,6 +637,31 @@ test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/perso
 switch_claude_impl personal >/dev/null
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
+# Parallel-account session: "Run a profile session" candidate filter.
+printf 'sk-ant-oat01-parA\n' | add_claude_token par-a >/dev/null   # setup-token kind
+jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/par-b.json"                       # oauth kind
+clear_active_claude_name
+test "$(claude_account_kind par-a)" = "token"
+test "$(claude_account_kind par-b)" = "oauth"
+# both are candidates when neither active nor running
+test "$(claude_parallel_candidates | grep -c '^par-a$')" = "1"
+test "$(claude_parallel_candidates | grep -c '^par-b$')" = "1"
+# a live session (our own live pid) hides the account
+register_claude_session par-a
+test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
+# a dead registration is pruned, so the account is a candidate again
+printf '99999999' >"$(claude_session_pid_file par-b)"
+test "$(claude_parallel_candidates | grep -c '^par-b$')" = "1"
+test ! -f "$(claude_session_pid_file par-b)"
+# the global-active account is never a parallel candidate
+rm -f "$(claude_session_pid_file par-a)"
+set_active_claude_name par-a
+test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
+clear_active_claude_name
+remove_claude par-a >/dev/null; remove_claude par-b >/dev/null
+rm -f "$(claude_session_pid_file par-a)"
+
 # Clean up
 remove_claude switch-test >/dev/null
 remove_claude expired-test >/dev/null

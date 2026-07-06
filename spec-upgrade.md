@@ -8,6 +8,29 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-07 — v0.15.0: Parallel account sessions ("Run a profile session")
+
+Run another Claude account in one terminal, on its own quota, alongside the
+global account — for draining two accounts at once near a weekly reset. Verified
+that `CLAUDE_CONFIG_DIR` makes `claude` read `.credentials.json` from that dir as
+a full OAuth login (`authMethod: claude.ai`, refreshable), distinct from the
+setup-token env-var path.
+
+- Renamed the menu `Open with model →` to `Run a profile session →` (holds
+  parallel accounts + model/provider profiles; the 8-item cap rules out a new
+  top-level entry).
+- `launch_claude_parallel` dispatches by kind: setup-token → `launch_claude_with_token`
+  (`CLAUDE_CODE_OAUTH_TOKEN`, static, collision-free); OAuth → `launch_claude_oauth_session`
+  (isolated `CLAUDE_CONFIG_DIR`, seeded once so the session owns its refreshing chain).
+- PID-based session registry (`register_claude_session` writes `$$`, which
+  survives `exec`; `claude_account_in_session` checks `kill -0` and prunes dead
+  entries). `claude_parallel_candidates` hides the global-active account and any
+  already-running account, so the same account never runs twice.
+- Tests cover kind dispatch, the candidate filter (active + in-session
+  exclusion, dead-pid prune), and OAuth session-dir seeding.
+- Caveat (documented): running an OAuth account in parallel moves its refresh
+  chain into the session dir; re-import to global-switch to it later.
+
 ### 2026-07-06 — v0.14.4: Hold Claude Code's credential lock during a switch
 
 Technique ported from [claude-swap](https://github.com/realiti4/claude-swap)

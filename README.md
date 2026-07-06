@@ -150,17 +150,27 @@ All three capture the refresh token, so the account switches across all clients.
 Adding a setup-token here is intentionally not offered — it would be a
 session-only credential, not a switchable account.
 
-### Launch with a model profile or setup-token
+### Run a profile session (this terminal only)
 
-**Open with model → Codex / Claude** launches the respective CLI for a single
-session. For Claude the picker lists:
+**Run a profile session → Codex / Claude** launches the respective CLI in **one
+terminal**, so it runs alongside your global account. For Claude the picker
+lists:
 
-- **Setup-tokens** — launched via `CLAUDE_CODE_OAUTH_TOKEN` (full first-party
-  Claude, this session only). **+ Add Claude setup-token** stores one; get it by
-  running `claude setup-token` and copying the shown `sk-ant-oat01-...` value.
-  Their usage is still monitored (see Monitoring) and shown in the picker.
-- **Model profiles** — alternate provider/model (for example DeepSeek), applied
-  via environment variables. **+ Add model profile** / **Manage profiles**.
+- **Parallel account** — run **another** Claude account right here, on **its own
+  quota**. Great for burning down two accounts at once when a weekly reset is a
+  day or two away. Setup-token accounts launch via `CLAUDE_CODE_OAUTH_TOKEN`;
+  full OAuth accounts via an isolated `CLAUDE_CONFIG_DIR` (a real, refreshable
+  session). The **global-active** account and any account **already running** are
+  hidden, so the same account never runs twice (which would split one quota and,
+  for OAuth, collide on refresh). Usage is shown per account.
+- **Model / provider** — alternate model or API provider (for example DeepSeek),
+  applied via environment variables. **+ Add model / API provider** / **Manage
+  profiles**.
+
+Add a setup-token with **+ Add Claude setup-token** (`claude setup-token`, shown
+once as `sk-ant-oat01-...`). Note: running an OAuth account in parallel moves its
+refresh chain into the session dir, so re-import it if you later want to
+global-switch to it.
 
 ### Manage accounts
 

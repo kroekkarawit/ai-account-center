@@ -109,7 +109,7 @@ manage_account_menu() {
     )
   else
     sub_options=(
-      "▶  Open with model (launch this session)::launch-token"
+      "▶  Run a profile session (this terminal)::launch-token"
       "↻  Refresh this account::refresh"
       "✎  Rename::rename"
       "◈  Update setup-token::update-token"
@@ -521,7 +521,7 @@ ACCOUNTS vs SETUP-TOKENS  (Claude)
   Setup-token            - a session credential like an API key. Full Claude
                            (Opus/Sonnet, subagents, all tools) but only for the
                            session you launch with it; other clients are
-                           untouched. Add/run under "Open with model -> Claude".
+                           untouched. Add/run under "Run a profile session".
 
 ADD A CLAUDE ACCOUNT (global switch)
 Choose "Add account -> Claude":
@@ -534,12 +534,21 @@ Choose "Add account -> Claude":
 All three capture the refresh token, so the account switches across all clients.
 (The base64 form is plaintext; use Export / Import accounts for an encrypted move.)
 
-OPEN WITH MODEL  (per-session)
-"Open with model -> Codex / Claude" launches the CLI for one session against a
-chosen credential. For Claude this lists your setup-tokens (launched via
-CLAUDE_CODE_OAUTH_TOKEN) and any alternate-provider model profiles (DeepSeek /
-custom). Add a setup-token with "+ Add Claude setup-token"; get one by running
-`claude setup-token` in another terminal (shown once as `sk-ant-oat01-...`).
+RUN A PROFILE SESSION  (this terminal only)
+"Run a profile session -> Codex / Claude" launches the CLI for ONE terminal, so
+it runs alongside your global account. For Claude it lists:
+  Parallel account  - run another Claude account here, on ITS OWN quota (great
+                      for burning two accounts at once near a weekly reset).
+                      Setup-token accounts launch via CLAUDE_CODE_OAUTH_TOKEN;
+                      OAuth accounts via an isolated CLAUDE_CONFIG_DIR. The
+                      global-active account and any already-running account are
+                      hidden, so the same account never runs twice (which would
+                      split one quota / collide on refresh).
+  Model / provider  - alternate model or API provider (DeepSeek / custom).
+Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
+once as `sk-ant-oat01-...`). Note: running an OAuth account in parallel moves its
+refresh chain into the session dir, so re-import it if you later want to global-
+switch to it.
 
 MONITORING
 "Refresh all usage" updates every stored account, including setup-tokens.
@@ -627,7 +636,7 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
   Setup-token         - เป็น session credential เหมือน API key ใช้ Claude ได้เต็ม
                         (Opus/Sonnet, subagent, ทุก tool) แต่เฉพาะ session ที่เปิด
                         เท่านั้น client อื่นไม่กระทบ เพิ่ม/เปิดที่
-                        "Open with model -> Claude"
+                        "Run a profile session"
 
 เพิ่มบัญชี CLAUDE (สลับระดับ global)
 เลือก "Add account -> Claude":
@@ -640,11 +649,17 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 ทั้งสามเก็บ refresh token บัญชีจึงสลับได้ทุก client
 (base64 เป็น plaintext ถ้าต้องการย้ายแบบเข้ารหัสให้ใช้ Export / Import accounts)
 
-เปิดด้วย MODEL / SETUP-TOKEN  (เฉพาะ session)
-"Open with model -> Codex / Claude" เปิด CLI หนึ่ง session ด้วย credential ที่เลือก
-ฝั่ง Claude จะลิสต์ setup-token (เปิดผ่าน CLAUDE_CODE_OAUTH_TOKEN) และ model profile
-ของ provider อื่น (DeepSeek/custom) เพิ่ม setup-token ด้วย "+ Add Claude setup-token"
-ขอ token โดยรัน `claude setup-token` (แสดงครั้งเดียวเป็น `sk-ant-oat01-...`)
+RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
+"Run a profile session -> Codex / Claude" เปิด CLI สำหรับ terminal เดียว รันคู่ขนานกับ
+บัญชี global ได้ ฝั่ง Claude จะลิสต์:
+  Parallel account - รันอีกบัญชีที่นี่ ใช้ quota ของบัญชีนั้นเอง (เหมาะตอนใกล้ reset
+                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) setup-token เปิดผ่าน
+                     CLAUDE_CODE_OAUTH_TOKEN, OAuth เปิดผ่าน CLAUDE_CONFIG_DIR
+                     บัญชี global-active และบัญชีที่รันอยู่แล้วจะถูกซ่อน กันรันซ้ำ
+  Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
+เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
+หมายเหตุ: รัน OAuth แบบ parallel จะย้าย refresh chain ไปที่ session dir ถ้าจะสลับ
+global ทีหลังให้ import ใหม่
 
 การ MONITOR
 "Refresh all usage" อัปเดตข้อมูลทุกบัญชี รวมถึง setup-token
@@ -864,7 +879,7 @@ interactive_menu() {
     action="$(
       AIC_REDRAW_ON_REFRESH_DONE=1 choose_from "Action" \
         "$(menu_item codex-switch "Switch account →" switch-account)" \
-        "$(menu_item model-launch "Open with model →" model-launch)" \
+        "$(menu_item model-launch "Run a profile session →" model-launch)" \
         "$(menu_item add-codex "Add account →" add-account)" \
         "$(menu_item refresh "Refresh all usage" refresh-all)" \
         "$(menu_item manage "Manage accounts" manage)" \
@@ -888,7 +903,7 @@ interactive_menu() {
         esac
         ;;
       model-launch)
-        prov="$(choose_from "Open with model" \
+        prov="$(choose_from "Run a profile session" \
           "$(menu_item codex-switch "Codex" codex)" \
           "$(menu_item claude-switch "Claude" claude)" \
         )" || continue

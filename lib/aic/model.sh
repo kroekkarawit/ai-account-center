@@ -259,17 +259,19 @@ manage_model_profiles() {
   esac
 }
 
-# Open with model → Claude. Launches a per-session Claude with either a
-# setup-token (CLAUDE_CODE_OAUTH_TOKEN, full first-party subscription) or a
-# third-party model profile (DeepSeek/custom via ANTHROPIC_BASE_URL).
+# Run a profile session → Claude. Runs a per-session Claude in THIS terminal:
+# a parallel Claude account (its own quota; setup-token via CLAUDE_CODE_OAUTH_TOKEN
+# or OAuth via CLAUDE_CONFIG_DIR) or a third-party model profile (DeepSeek/custom).
+# Parallel accounts exclude the global-active one and any already running.
 interactive_claude_launch() {
-  local options=() name display base file item key badge
+  local options=() name display base file item key badge kind
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    kind="$(claude_account_kind "$name")"
     badge="$(claude_token_usage_badge "$name")"
-    options+=("$name  —  setup-token${badge:+  $badge}::tok:$name")
-  done < <(claude_token_names)
+    options+=("$name  —  parallel account ($kind)${badge:+  $badge}::acct:$name")
+  done < <(claude_parallel_candidates)
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
@@ -280,16 +282,16 @@ interactive_claude_launch() {
   done < <(model_profile_names)
 
   options+=("＋ Add Claude setup-token::__addtok__")
-  options+=("＋ Add model profile (other provider)::__addprof__")
+  options+=("＋ Add model / API provider::__addprof__")
   options+=("⚙ Manage model profiles::__manage__")
 
-  item="$(choose_from "Open Claude with…" "${options[@]}")" || return 1
+  item="$(choose_from "Run a profile session" "${options[@]}")" || return 1
   key="${item##*::}"
   case "$key" in
     __addtok__)  printf 'Name for this setup-token: '; IFS= read -r name; add_claude_token "$name" ;;
     __addprof__) add_model_profile ;;
     __manage__)  manage_model_profiles ;;
-    tok:*)  launch_claude_with_token "${key#tok:}" ;;
+    acct:*) launch_claude_parallel "${key#acct:}" ;;
     prof:*) launch_with_profile "${key#prof:}" ;;
   esac
 }
