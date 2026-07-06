@@ -546,9 +546,10 @@ it runs alongside your global account. For Claude it lists:
                       split one quota / collide on refresh).
   Model / provider  - alternate model or API provider (DeepSeek / custom).
 Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
-once as `sk-ant-oat01-...`). Note: running an OAuth account in parallel moves its
-refresh chain into the session dir, so re-import it if you later want to global-
-switch to it.
+once as `sk-ant-oat01-...`). Reclaiming: switching globally to an account that is
+running in a parallel session offers to terminate that session; its latest token
+is synced back automatically, so you never re-import. Closing the terminal also
+frees the session.
 
 MONITORING
 "Refresh all usage" updates every stored account, including setup-tokens.
@@ -658,8 +659,8 @@ RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
                      บัญชี global-active และบัญชีที่รันอยู่แล้วจะถูกซ่อน กันรันซ้ำ
   Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
 เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
-หมายเหตุ: รัน OAuth แบบ parallel จะย้าย refresh chain ไปที่ session dir ถ้าจะสลับ
-global ทีหลังให้ import ใหม่
+การเรียกคืน: ถ้าสลับ global ไปบัญชีที่กำลังรัน parallel อยู่ aic จะถามเพื่อปิด session นั้น
+แล้ว sync token ล่าสุดกลับให้อัตโนมัติ จึงไม่ต้อง import ใหม่ (ปิด terminal ก็ปลดได้เช่นกัน)
 
 การ MONITOR
 "Refresh all usage" อัปเดตข้อมูลทุกบัญชี รวมถึง setup-token

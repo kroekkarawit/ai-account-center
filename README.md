@@ -168,9 +168,13 @@ lists:
   profiles**.
 
 Add a setup-token with **+ Add Claude setup-token** (`claude setup-token`, shown
-once as `sk-ant-oat01-...`). Note: running an OAuth account in parallel moves its
-refresh chain into the session dir, so re-import it if you later want to
-global-switch to it.
+once as `sk-ant-oat01-...`).
+
+**Reclaiming a parallel account:** an account running in a parallel session is
+marked *in use* and hidden from the parallel list. If you **global-switch** to
+it, aic warns and offers to **terminate that session**, then syncs the session's
+latest (refreshed) token back into the account before switching — so you **never
+re-import**. Closing the terminal also frees the session naturally.
 
 ### Manage accounts
 

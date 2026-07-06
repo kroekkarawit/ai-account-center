@@ -8,6 +8,24 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-07 — v0.15.1: Reclaim a parallel account (terminate + sync-back)
+
+Removes the v0.15.0 "re-import to switch later" caveat. An OAuth account run in
+parallel rotates its refresh token forward inside the session dir, leaving the
+store copy stale. Now, instead of asking the user to re-import:
+
+- `reclaim_claude_session` terminates a live session (`kill`, then `-9` if it
+  lingers; interactive confirm), **syncs the session's latest `.credentials.json`
+  back into the account store**, and drops the session copy — so the chain lives
+  in one place again.
+- `switch_claude_impl` calls it before the swap, so global-switching to an
+  account that's checked out to a parallel session cleanly takes it over with the
+  live token. Closing the terminal still frees the session (PID prune); the
+  sync-back then happens on the next reclaim.
+- The switch list flags an account currently `⏵ in parallel session`.
+- `remove_claude` cleans up the session dir + PID file.
+- Test: reclaim syncs the rotated token back, prunes the PID file, drops the dir.
+
 ### 2026-07-07 — v0.15.0: Parallel account sessions ("Run a profile session")
 
 Run another Claude account in one terminal, on its own quota, alongside the

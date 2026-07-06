@@ -241,6 +241,53 @@ launch_claude_parallel() {
   esac
 }
 
+# Reclaim an account from a parallel session so its refresh chain lives in one
+# place again: terminate a live session (with confirmation), sync the session's
+# latest refreshed credential back into the account store, then drop the session
+# copy. This is what removes the "re-import to switch later" caveat — the token
+# the session rotated forward is written back before we hand the account to the
+# global keychain. Returns 1 only if the user declines to terminate a live session.
+reclaim_claude_session() {
+  local name="$1" mode="${2:-warn}"
+  local pidf sessdir sesscreds pid
+  pidf="$(claude_session_pid_file "$name")"
+  sessdir="$(claude_session_config_dir "$name")"
+  sesscreds="$sessdir/.credentials.json"
+
+  if [[ -f "$pidf" ]]; then
+    pid="$(cat "$pidf" 2>/dev/null)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      warn "Account '$name' is running in a parallel session (PID $pid)."
+      if [[ "$mode" == "confirm" && -t 0 ]]; then
+        local ans
+        ans="$(choose_from "Terminate that session and take '$name' global?" \
+          "No, cancel" "Yes, terminate it")" || return 1
+        [[ "$ans" == Yes* ]] || return 1
+      fi
+      kill "$pid" 2>/dev/null || true
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+      printf 'Terminated parallel session for %s.\n' "$name"
+    fi
+    rm -f "$pidf" 2>/dev/null || true
+  fi
+
+  # Write the session's (rotated-forward) credential back to the store, then drop
+  # the session copy so the chain isn't held in two places.
+  if [[ -f "$sesscreds" ]]; then
+    local oauth dest
+    oauth="$(jq -c '.claudeAiOauth // empty' "$sesscreds" 2>/dev/null)"
+    dest="$(claude_account_file "$name")"
+    if [[ -n "$oauth" && -f "$dest" ]]; then
+      jq --argjson o "$oauth" '.claudeAiOauth = $o' "$dest" >"$dest.tmp" 2>/dev/null &&
+        chmod 600 "$dest.tmp" && mv -f "$dest.tmp" "$dest"
+    fi
+    rm -rf "$sessdir" 2>/dev/null || true
+  fi
+  return 0
+}
+
 add_claude_token() {
   local name="$1"
   local token="${2:-}"
@@ -550,6 +597,11 @@ switch_claude_impl() {
   [[ -n "$refresh_token" ]] ||
     die "Account '$name' has no OAuth credentials. Re-import from the menu: Add Claude account → Import current login."
 
+  # If this account is checked out to a parallel session, terminate it and sync
+  # its rotated-forward token back into the store first, so the global switch
+  # lands the live credential (no stale-token / re-import problem).
+  reclaim_claude_session "$name" "$process_mode" || return 1
+
   warn_running_claude_for_switch "$process_mode" || return 1
 
   if is_claude_token_expired "$source"; then
@@ -592,12 +644,16 @@ interactive_claude_use() {
   # token the keychain requires. Setup-token accounts are launched per-session
   # from Open with model → Claude, so they are excluded here (ranked by score,
   # so the first OAuth entry is the best switchable account).
-  local options=() best_name="" name score rest item
+  local options=() best_name="" name score rest item label
   while IFS=$'\t' read -r name score rest; do
     [[ -n "$name" ]] || continue
     [[ "$(claude_account_kind "$name")" == "oauth" ]] || continue
     [[ -z "$best_name" ]] && best_name="$name"
-    options+=("$(claude_choice_label "$name" "$best_name" "$score")::$name")
+    label="$(claude_choice_label "$name" "$best_name" "$score")"
+    # Flag an account currently checked out to a parallel session — switching to
+    # it will offer to terminate that session and take it global.
+    claude_account_in_session "$name" && label="$label  ⏵ in parallel session"
+    options+=("$label::$name")
   done < <(claude_recommendations)
 
   if [[ "${#options[@]}" -eq 0 ]]; then
@@ -619,7 +675,8 @@ remove_claude() {
   local file
   file="$(claude_account_file "$name")"
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
-  rm -f "$file" "$(usage_file claude "$name")"
+  rm -f "$file" "$(usage_file claude "$name")" "$(claude_session_pid_file "$name")"
+  rm -rf "$(claude_session_config_dir "$name")"
   printf 'Removed Claude account: %s\n' "$name"
 }
 
