@@ -129,9 +129,19 @@ Claude has two credential types, and they behave differently:
 **Add account → Claude** (global switch):
 
 - **Login with OAuth** — full Claude subscription OAuth, imported automatically.
-- **Import current login** — imports an existing Claude Code login.
+- **Import current login** — imports the Claude Code login on this machine.
+- **Import credential (base64 from another machine)** — paste a credential
+  captured on another Mac. On that machine run:
 
-Both capture the refresh token, so the account switches across all clients.
+  ```sh
+  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n' | pbcopy
+  ```
+
+  then paste the copied string here. It carries the refresh token, so the
+  account is globally switchable — different from a setup-token. (This is a
+  plaintext credential; for an encrypted transfer use Export / Import accounts.)
+
+All three capture the refresh token, so the account switches across all clients.
 Adding a setup-token here is intentionally not offered — it would be a
 session-only credential, not a switchable account.
 

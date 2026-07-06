@@ -195,16 +195,14 @@ import_current_claude() {
   printf 'Saved Claude account: %s\n' "$name"
 }
 
-save_current_claude_oauth() {
-  local name="$1"
-  validate_name "$name"
-  local blob oauth_obj refresh_token org_uuid destination
-  blob="$(current_claude_oauth_blob)"
-  [[ -n "$blob" ]] || die "No Claude OAuth login found. Add it from the menu: Add Claude account → Login with OAuth."
+# Persist a keychain-shaped blob ({"claudeAiOauth":{…}}) as a switchable account.
+# Returns non-zero (stores nothing) if the blob has no OAuth refresh token.
+store_claude_oauth_blob() {
+  local name="$1" blob="$2"
+  local oauth_obj refresh_token org_uuid destination
   oauth_obj="$(jq -c '.claudeAiOauth // empty' <<<"$blob" 2>/dev/null)"
   refresh_token="$(jq -r '.claudeAiOauth.refreshToken // empty' <<<"$blob" 2>/dev/null)"
-  [[ -n "$oauth_obj" && -n "$refresh_token" ]] ||
-    die "Claude login found but missing OAuth tokens. Re-add from the menu: Add Claude account → Login with OAuth."
+  [[ -n "$oauth_obj" && -n "$refresh_token" ]] || return 1
   org_uuid="$(jq -r '.organizationUuid // empty' <<<"$blob" 2>/dev/null)"
   destination="$(claude_account_file "$name")"
   jq -n \
@@ -215,6 +213,67 @@ save_current_claude_oauth() {
     >"$destination.tmp" || die "Could not store Claude account."
   chmod 600 "$destination.tmp"
   mv -f "$destination.tmp" "$destination"
+}
+
+save_current_claude_oauth() {
+  local name="$1"
+  validate_name "$name"
+  local blob
+  blob="$(current_claude_oauth_blob)"
+  [[ -n "$blob" ]] || die "No Claude OAuth login found. Add it from the menu: Add Claude account → Login with OAuth."
+  store_claude_oauth_blob "$name" "$blob" ||
+    die "Claude login found but missing OAuth tokens. Re-add from the menu: Add Claude account → Login with OAuth."
+}
+
+# Import a full Claude OAuth login from a base64 blob captured on another machine:
+#   security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n'
+# Unlike a setup-token this carries the refresh token, so the imported account is
+# globally switchable. (A bare setup-token belongs under Open with model.)
+import_claude_oauth_blob() {
+  local name="$1"
+  local input="${2:-}"
+  validate_name "$name"
+
+  if [[ -z "$input" ]]; then
+    if [[ ! -t 0 ]]; then
+      IFS= read -r input
+    else
+      printf '%sOn the source machine, run:%s\n' "$BOLD" "$RESET" >&2
+      printf '  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\\n" | pbcopy\n' >&2
+      printf '%sPaste the copied credential here:%s ' "$BOLD" "$RESET" >&2
+      IFS= read -r input
+    fi
+  fi
+  input="$(printf '%s' "$input" | tr -d '[:space:]')"
+  [[ -n "$input" ]] || die "No credential provided."
+
+  # Accept raw JSON (starts with '{') or base64 of it.
+  local blob=""
+  if [[ "$input" == \{* ]]; then
+    blob="$input"
+  else
+    blob="$(printf '%s' "$input" | base64 -d 2>/dev/null)"
+    [[ -n "$blob" ]] || blob="$(printf '%s' "$input" | base64 -D 2>/dev/null)"
+  fi
+  jq -e . >/dev/null 2>&1 <<<"$blob" ||
+    die "Could not decode the credential (expected base64 of the keychain JSON)."
+
+  if [[ -f "$(claude_account_file "$name")" ]]; then
+    local existing_kind
+    existing_kind="$(claude_account_kind "$name")"
+    if [[ -t 0 ]]; then
+      local ans
+      ans="$(choose_from "Claude account '$name' exists ($existing_kind). Overwrite with imported OAuth login?" "No, cancel" "Yes, overwrite")" || return 1
+      [[ "$ans" == Yes* ]] || return 1
+    else
+      warn "Overwriting existing Claude account '$name' ($existing_kind) with imported OAuth login."
+    fi
+  fi
+
+  store_claude_oauth_blob "$name" "$blob" ||
+    die "Not a full Claude OAuth credential (no refresh token). For an inference-only setup-token use: Open with model → Claude → Add Claude setup-token."
+
+  printf 'Imported Claude OAuth account: %s  (globally switchable)\n' "$name"
 }
 
 login_claude() {

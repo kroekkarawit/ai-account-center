@@ -526,8 +526,12 @@ ACCOUNTS vs SETUP-TOKENS  (Claude)
 ADD A CLAUDE ACCOUNT (global switch)
 Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
-  Import current login  - import an existing Claude Code login
-Both capture the refresh token, so the account switches across all clients.
+  Import current login  - import this machine's Claude Code login
+  Import credential     - paste a base64 credential from another machine:
+                          security find-generic-password -s "Claude Code-credentials" \
+                            -w | base64 | tr -d '\n' | pbcopy
+All three capture the refresh token, so the account switches across all clients.
+(The base64 form is plaintext; use Export / Import accounts for an encrypted move.)
 
 OPEN WITH MODEL  (per-session)
 "Open with model -> Codex / Claude" launches the CLI for one session against a
@@ -627,8 +631,12 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 เพิ่มบัญชี CLAUDE (สลับระดับ global)
 เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
-  Import current login  - ใช้ login ที่ Claude Code มีอยู่แล้ว
-ทั้งสองเก็บ refresh token บัญชีจึงสลับได้ทุก client
+  Import current login  - ใช้ login ที่ Claude Code มีอยู่บนเครื่องนี้
+  Import credential     - วาง base64 credential จากอีกเครื่อง โดยรันบนเครื่องต้นทาง:
+                          security find-generic-password -s "Claude Code-credentials" \
+                            -w | base64 | tr -d '\n' | pbcopy
+ทั้งสามเก็บ refresh token บัญชีจึงสลับได้ทุก client
+(base64 เป็น plaintext ถ้าต้องการย้ายแบบเข้ารหัสให้ใช้ Export / Import accounts)
 
 เปิดด้วย MODEL / SETUP-TOKEN  (เฉพาะ session)
 "Open with model -> Codex / Claude" เปิด CLI หนึ่ง session ด้วย credential ที่เลือก
@@ -912,11 +920,13 @@ interactive_menu() {
           sub="$(choose_from "Add Claude account (global switch)" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \
+            "$(menu_item claude-token "Import credential (base64 from another machine)" claude-import-blob)" \
           )" || continue
           sub="${sub##*::}"
           case "$sub" in
             claude-login) printf 'Account name: '; IFS= read -r name; login_claude "$name" ;;
             claude-import) printf 'Account name: '; IFS= read -r name; import_current_claude "$name" ;;
+            claude-import-blob) printf 'Account name: '; IFS= read -r name; import_claude_oauth_blob "$name" ;;
           esac
         fi
         ;;

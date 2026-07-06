@@ -8,6 +8,21 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-06 — v0.14.1: Import Claude OAuth credential (base64)
+
+- **Add account → Claude → Import credential (base64 from another machine).**
+  `import_claude_oauth_blob` accepts a base64 (or raw JSON) keychain blob
+  captured elsewhere with
+  `security find-generic-password -s "Claude Code-credentials" -w | base64`,
+  and stores it as a full OAuth account (refresh token preserved → globally
+  switchable). Rejects a blob with no refresh token (that is a setup-token —
+  belongs under Open with model). Confirms before overwriting an existing
+  account (so it can also promote a setup-token account to OAuth).
+- Refactor: shared `store_claude_oauth_blob` now backs both
+  `save_current_claude_oauth` and the new importer.
+- Note: base64 is plaintext transport; the encrypted path is Export / Import
+  accounts (§7).
+
 ### 2026-07-06 — v0.14.0: Claude accounts vs setup-tokens
 
 Verified against `claude` 2.1.x: the CLI only accepts an OAuth login (with a

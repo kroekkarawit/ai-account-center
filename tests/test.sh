@@ -426,6 +426,20 @@ fi
 test "$(claude_account_kind oauthy)" = "oauth"
 rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json"
 
+# Import a full OAuth login from a base64 keychain blob (another machine).
+blob_json='{"claudeAiOauth":{"accessToken":"sk-ant-oat01-imp","refreshToken":"sk-ant-ort01-imp","expiresAt":1783342808084,"scopes":["user:inference","user:profile"],"subscriptionType":"pro"},"mcpOAuth":{}}'
+blob_b64="$(printf '%s' "$blob_json" | base64 | tr -d '\n')"
+printf '%s\n' "$blob_b64" | import_claude_oauth_blob imported >/dev/null
+test "$(claude_account_kind imported)" = "oauth"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/imported.json")" = "sk-ant-ort01-imp"
+# A blob without a refresh token (setup-token shape) must be rejected.
+notoken_b64="$(printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}' | base64 | tr -d '\n')"
+if printf '%s\n' "$notoken_b64" | import_claude_oauth_blob rejectme >/dev/null 2>&1; then
+  echo "FAIL: imported a credential with no refresh token"; exit 1
+fi
+test ! -f "$AIC_DATA_DIR/accounts/claude/rejectme.json"
+rm -f "$AIC_DATA_DIR/accounts/claude/imported.json"
+
 # At 100% usage the probe is rejected with HTTP 429, but Anthropic still returns
 # the rate-limit headers. Those must be trusted (100% used + reset), not shown
 # as an error.
