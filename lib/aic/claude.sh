@@ -406,6 +406,59 @@ warn_running_claude_for_switch() {
   [[ "$answer" == *"Yes"* ]] || return 1
 }
 
+# ---- Cooperate with Claude Code's own credential lock ----------------------
+# Claude Code guards its OAuth token refresh with a proper-lockfile directory
+# lock at "<config-home>.lock" (e.g. ~/.claude.lock): mkdir is the mutex, and a
+# lock whose mtime is older than 10s is stale and may be taken over. If we swap
+# the keychain while a running claude is mid-refresh, its save would overwrite
+# our swap with the refreshed OLD-account token and strand a pre-rotation refresh
+# token (the very collision behind the "already used" errors). Holding this lock
+# during our write makes claude's own double-checked re-read see the swapped
+# (non-expired) credential and abort its refresh. The write is sub-second, so no
+# mtime toucher is needed. (Ported from claude-swap's claude_locks.py.)
+claude_credentials_lock_dir() {
+  printf '%s.lock' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+}
+
+with_claude_credentials_lock() {
+  local lock now mtime age rc=0 deadline
+  lock="$(claude_credentials_lock_dir)"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  deadline=$(( $(date +%s) + 9 ))
+  while ! mkdir "$lock" 2>/dev/null; do
+    now="$(date +%s)"
+    mtime="$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || printf '%s' "$now")"
+    age=$(( now - mtime ))
+    if (( age > 10 )); then
+      rmdir "$lock" 2>/dev/null || true
+      continue
+    fi
+    if (( now >= deadline )); then
+      warn "Claude credential lock is busy; switching without it."
+      "$@"
+      return $?
+    fi
+    sleep 0.3
+  done
+  "$@" || rc=$?
+  rmdir "$lock" 2>/dev/null || true
+  return "$rc"
+}
+
+# Re-read the live keychain, merge our account's OAuth over it (preserving
+# mcpOAuth etc.), and write it back — the read-merge-write is one critical
+# section, run under with_claude_credentials_lock.
+_switch_claude_write() {
+  local source="$1" live_blob new_blob
+  live_blob="$(current_claude_oauth_blob || printf '{}')"
+  new_blob="$(jq -n \
+    --argjson l "$live_blob" \
+    --argjson oauth "$(jq '.claudeAiOauth' "$source")" \
+    --arg org "$(jq -r '.organizationUuid // empty' "$source")" \
+    '$l | .claudeAiOauth = $oauth | .organizationUuid = $org')"
+  write_claude_keychain "$new_blob"
+}
+
 switch_claude_impl() {
   local name="$1" process_mode="${2:-warn}"
   validate_name "$name"
@@ -447,14 +500,9 @@ switch_claude_impl() {
     fi
   fi
 
-  local new_blob live_blob
-  live_blob="$(current_claude_oauth_blob || printf '{}')"
-  new_blob="$(jq -n \
-    --argjson l "$live_blob" \
-    --argjson oauth "$(jq '.claudeAiOauth' "$source")" \
-    --arg org "$(jq -r '.organizationUuid // empty' "$source")" \
-    '$l | .claudeAiOauth = $oauth | .organizationUuid = $org')"
-  write_claude_keychain "$new_blob"
+  # Land the swap under Claude Code's credential lock so a concurrent refresh in
+  # a running claude can't clobber it (and strand a pre-rotation refresh token).
+  with_claude_credentials_lock _switch_claude_write "$source"
   set_active_claude_name "$name"
   printf 'Active Claude account: %s\n' "$name"
 }

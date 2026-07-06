@@ -587,6 +587,19 @@ test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "switch-te
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" ">switch-test"
 
+# Claude credential lock: cooperates with Claude Code's ~/.claude.lock so a swap
+# never interleaves with a running claude's token refresh.
+test "$(claude_credentials_lock_dir)" = "$HOME/.claude.lock"
+rm -rf "$(claude_credentials_lock_dir)"
+with_claude_credentials_lock true
+test ! -d "$(claude_credentials_lock_dir)"                 # released after use
+# A stale lock (mtime > 10s old) is stolen, so a switch never blocks forever.
+mkdir -p "$(claude_credentials_lock_dir)"
+touch -t 200001010000 "$(claude_credentials_lock_dir)"
+with_claude_credentials_lock bash -c "printf ran > '$TMP/lock-ran'"
+test "$(cat "$TMP/lock-ran")" = "ran"                     # ran despite stale lock
+test ! -d "$(claude_credentials_lock_dir)"                # released
+
 # Verify expired token detection: create account with past expiresAt
 past_ms=$(( ($(date +%s) - 3600) * 1000 ))
 expired_blob="$(jq -n \

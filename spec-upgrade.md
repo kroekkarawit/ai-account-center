@@ -8,6 +8,28 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-06 — v0.14.4: Hold Claude Code's credential lock during a switch
+
+Technique ported from [claude-swap](https://github.com/realiti4/claude-swap)
+(`claude_locks.py`). Claude Code guards its OAuth refresh with a proper-lockfile
+directory lock at `<config-home>.lock` (`~/.claude.lock`; `mkdir` is the mutex,
+stale after 10s). Previously `switch_claude_impl` wrote the keychain unlocked, so
+if a running `claude` was mid-refresh its save could overwrite our swap with the
+refreshed **old-account** token and strand a pre-rotation refresh token — the
+self-inflicted version of the "refresh token already used" collision.
+
+- Added `claude_credentials_lock_dir` + `with_claude_credentials_lock` (acquire
+  via `mkdir`, steal locks older than 10s, ~9s bounded wait then best-effort
+  proceed, release via `rmdir`; sub-second hold so no mtime toucher).
+- `switch_claude_impl` now performs the read-merge-write of the live keychain
+  under that lock (`_switch_claude_write`), so Claude Code's own double-checked
+  re-read sees the swapped non-expired credential and aborts its refresh.
+- Unit test covers lock dir resolution, release, and stale-lock takeover.
+
+Notes for later (from the same study): per-session OAuth via `CLAUDE_CONFIG_DIR`
+(a refreshable alternative to setup-token launch), auto-switch with
+cooldown/hysteresis/quarantine, and refresh-error classification.
+
 ### 2026-07-06 — v0.14.3: Keep `tee /dev/tty` in the capture command
 
 - The capture command keeps `| tee /dev/tty | … ; echo` so it **prints** the
