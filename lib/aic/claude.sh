@@ -34,6 +34,57 @@ print_claude_token_instructions() {
   printf '\n' >&2
 }
 
+# Single source of truth for the "capture credential on the other Mac" command,
+# used by both the on-screen instructions and the [c] copy-to-clipboard hotkey.
+claude_cred_capture_cmd() {
+  printf '%s' 'security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | pbcopy'
+}
+
+# A framed, colored walkthrough for importing a Claude credential from another
+# machine: a source→destination diagram, numbered steps, and the command shown
+# on its own highlighted line so it is easy to select or copy with [c].
+print_claude_credential_import_box() {
+  local h v tl tr bl br conn rule box gap
+  if supports_utf8; then
+    h='─'; v='│'; tl='┌'; tr='┐'; bl='└'; br='┘'; conn=' ──> '
+  else
+    h='-'; v='|'; tl='+'; tr='+'; bl='+'; br='+'; conn=' --> '
+  fi
+  rule="$(printf "${h}%.0s" $(seq 1 64))"
+  box="$(printf "${h}%.0s" $(seq 1 12))"   # 12 inner cols → 14-wide box incl borders
+  gap='     '                              # 5 spaces == visual width of conn
+
+  local C="$CYAN" R="$RESET" B="$BOLD" D="$DIM" Y="$YELLOW" G="$GREEN" W="$WHITE"
+
+  # Build each row as one string so widths line up exactly across rows.
+  local cell_top="${C}${tl}${box}${tr}${R}"
+  local cell_bot="${C}${bl}${box}${br}${R}"
+  local arrow="${B}${Y}${conn}${R}"
+  local cellL="${C}${v}${R} OTHER Mac  ${C}${v}${R}"
+  local cellM="${C}${v}${R} clipboard  ${C}${v}${R}"
+  local cellR="${C}${v}${R}  THIS Mac  ${C}${v}${R}"
+
+  printf '\n%s%s%s\n' "$C" "$rule" "$R" >&2
+  printf '  %s%sIMPORT CLAUDE CREDENTIAL%s  %s· bring a switchable account onto this Mac%s\n' \
+    "$B" "$W" "$R" "$D" "$R" >&2
+  printf '%s%s%s\n\n' "$C" "$rule" "$R" >&2
+
+  printf '%s\n' "  ${cell_top}${gap}${cell_top}${gap}${cell_top}" >&2
+  printf '%s\n' "  ${cellL}${arrow}${cellM}${arrow}${cellR}" >&2
+  printf '%s\n' "  ${cell_bot}${gap}${cell_bot}${gap}${cell_bot}" >&2
+  printf '%s\n\n' "  ${D} run command  ${R}${gap}${D} or via chat  ${R}${gap}${D} paste result ${R}" >&2
+
+  printf '  %s1%s  Press %s[c]%s to copy the command  %s(or select the line below)%s\n' \
+    "$B" "$R" "$B$G" "$R" "$D" "$R" >&2
+  printf '  %s2%s  Run it on the OTHER Mac, or paste it to that person in chat.\n' "$B" "$R" >&2
+  printf '  %s3%s  That copies their Claude credential to the clipboard.\n' "$B" "$R" >&2
+  printf '  %s4%s  Paste the copied credential back here.\n\n' "$B" "$R" >&2
+
+  printf '  %scommand to run on the other machine:%s\n' "$D" "$R" >&2
+  printf '    %s%s%s%s\n' "$B" "$Y" "$(claude_cred_capture_cmd)" "$R" >&2
+  printf '%s%s%s\n' "$C" "$rule" "$R" >&2
+}
+
 # Strip whitespace and control bytes (e.g. a stray ESC captured during a paste)
 # from a Claude token. A setup token / OAuth access token is a single run of
 # printable, whitespace-free characters, so this only ever removes corruption.
@@ -238,10 +289,22 @@ import_claude_oauth_blob() {
     if [[ ! -t 0 ]]; then
       IFS= read -r input
     else
-      printf '%sOn the source machine, run:%s\n' "$BOLD" "$RESET" >&2
-      printf '  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\\n" | pbcopy\n' >&2
-      printf '%sPaste the copied credential here:%s ' "$BOLD" "$RESET" >&2
-      IFS= read -r input
+      print_claude_credential_import_box
+      while true; do
+        printf '\n%sPaste credential%s  %s(or press %sc%s%s then Enter to copy the command)%s: ' \
+          "$BOLD" "$RESET" "$DIM" "$BOLD$GREEN" "$RESET" "$DIM" "$RESET" >&2
+        IFS= read -r input
+        case "$input" in
+          c|C)
+            if printf '%s' "$(claude_cred_capture_cmd)" | transfer_clipboard_copy; then
+              printf '  %s✓ Command copied — run it on the other Mac, or paste it to that person in chat.%s\n' "$GREEN" "$RESET" >&2
+            else
+              printf '  %s! No clipboard tool found (pbcopy/xclip). Select the command above to copy it.%s\n' "$YELLOW" "$RESET" >&2
+            fi
+            ;;
+          *) break ;;
+        esac
+      done
     fi
   fi
   input="$(printf '%s' "$input" | tr -d '[:space:]')"

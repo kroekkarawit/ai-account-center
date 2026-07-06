@@ -137,9 +137,11 @@ Claude has two credential types, and they behave differently:
   security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n' | pbcopy
   ```
 
-  then paste the copied string here. It carries the refresh token, so the
-  account is globally switchable — different from a setup-token. (This is a
-  plaintext credential; for an encrypted transfer use Export / Import accounts.)
+  then paste the copied string here. At the prompt, press **`c`** to copy that
+  command to your clipboard (to run on the other machine or send in chat). It
+  carries the refresh token, so the account is globally switchable — different
+  from a setup-token. (This is a plaintext credential; for an encrypted transfer
+  use Export / Import accounts.)
 
 All three capture the refresh token, so the account switches across all clients.
 Adding a setup-token here is intentionally not offered — it would be a

@@ -8,6 +8,17 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-06 — v0.14.2: Credential-import walkthrough + [c] hotkey
+
+- `print_claude_credential_import_box` — a framed, colored guide for the base64
+  import: an OTHER Mac → clipboard/chat → THIS Mac diagram, numbered steps, and
+  the capture command on its own highlighted line (UTF-8 box art with an ASCII
+  fallback via `supports_utf8`).
+- **`c` hotkey** at the paste prompt copies the capture command to the clipboard
+  (`transfer_clipboard_copy`), so the user can run it on the other machine or
+  send it in chat without retyping. `claude_cred_capture_cmd` is the single
+  source of truth for both the displayed and copied command.
+
 ### 2026-07-06 — v0.14.1: Import Claude OAuth credential (base64)
 
 - **Add account → Claude → Import credential (base64 from another machine).**
