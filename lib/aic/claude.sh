@@ -185,6 +185,29 @@ claude_parallel_candidates() {
   done < <(claude_names)
 }
 
+# A fresh CLAUDE_CONFIG_DIR is a blank first-run, so Claude Code shows its theme +
+# login wizard. Mirror the user's global config (which already has onboarding
+# done) into the session dir — minus account identity (oauthAccount) and project
+# history — and carry over their settings, so a parallel session starts exactly
+# like their normal claude, just credential-isolated. Seeded once; the live
+# session then evolves its own config.
+_seed_claude_session_config() {
+  local dir="$1" cj="$HOME/.claude.json" out="$dir/.claude.json"
+  mkdir -p "$dir"; chmod 700 "$dir"
+  if [[ ! -f "$out" ]]; then
+    if [[ -f "$cj" ]] && jq 'del(.oauthAccount, .projects) | .hasCompletedOnboarding = true' "$cj" >"$out.tmp" 2>/dev/null; then
+      mv -f "$out.tmp" "$out"
+    else
+      rm -f "$out.tmp" 2>/dev/null
+      printf '{"hasCompletedOnboarding":true,"theme":"dark","numStartups":1}' >"$out"
+    fi
+    chmod 600 "$out"
+  fi
+  if [[ -f "$HOME/.claude/settings.json" && ! -f "$dir/settings.json" ]]; then
+    cp "$HOME/.claude/settings.json" "$dir/settings.json" 2>/dev/null && chmod 600 "$dir/settings.json"
+  fi
+}
+
 # Seed an isolated CLAUDE_CONFIG_DIR with the account's OAuth credential — only on
 # first use. After that the session dir owns its own (self-refreshing) token
 # chain, so we never overwrite a token the live session has already rotated.
@@ -227,7 +250,7 @@ launch_claude_with_token() {
   [[ -n "$token" ]] || die "Account '$name' has no usable token."
   require_command claude
   dir="$(claude_session_config_dir "$name")"
-  mkdir -p "$dir"; chmod 700 "$dir"
+  _seed_claude_session_config "$dir"
   register_claude_session "$name"
   printf '%sLaunching Claude  ·  parallel (setup-token): %s  ·  this terminal, own quota%s\n' \
     "$CYAN" "$name" "$RESET"
@@ -242,6 +265,7 @@ launch_claude_oauth_session() {
   [[ -f "$(claude_account_file "$name")" ]] || die "Unknown Claude account: $name"
   require_command claude
   local dir; dir="$(claude_session_config_dir "$name")"
+  _seed_claude_session_config "$dir"
   _seed_claude_session_dir "$name" "$dir"
   register_claude_session "$name"
   printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota (keychain untouched)%s\n' \

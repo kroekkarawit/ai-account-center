@@ -675,6 +675,13 @@ test ! -f "$(claude_session_pid_file rec-a)"   # pid pruned
 test ! -d "$rec_dir"                            # session dir dropped
 remove_claude rec-a >/dev/null
 
+# Parallel session config seed: skip Claude Code's first-run wizard, no identity.
+seed_dir="$AIC_DATA_DIR/sessions/claude-seedtest"; rm -rf "$seed_dir"
+_seed_claude_session_config "$seed_dir"
+test "$(jq -r '.hasCompletedOnboarding' "$seed_dir/.claude.json")" = "true"
+test "$(jq -r 'has("oauthAccount")' "$seed_dir/.claude.json")" = "false"
+rm -rf "$seed_dir"
+
 # Clean up
 remove_claude switch-test >/dev/null
 remove_claude expired-test >/dev/null

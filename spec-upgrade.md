@@ -8,6 +8,21 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-07 — v0.15.3: Seed session config so parallel launch isn't a blank first-run
+
+The v0.15.2 isolation (a dedicated `CLAUDE_CONFIG_DIR`) fixed the wrong-account
+bug but made every parallel launch a **fresh** Claude Code config → its first-run
+wizard (theme + login prompt) appeared, even with a valid token.
+
+- New `_seed_claude_session_config`: mirrors the user's `~/.claude.json` into the
+  session dir (with `hasCompletedOnboarding=true`) minus `oauthAccount` (identity)
+  and `projects` (history), and copies `~/.claude/settings.json`. Seeded once.
+- Called by both `launch_claude_with_token` and `launch_claude_oauth_session`.
+- Verified: seeded config keeps `hasCompletedOnboarding=true`, drops account
+  identity, and auth still resolves (`loggedIn:true, oauth_token`) in the isolated
+  dir. (Interactive wizard-skip couldn't be captured in CI's non-tty sandbox; the
+  config is a copy of the user's working config, which shows no wizard.)
+
 ### 2026-07-07 — v0.15.2: Isolate parallel launches (fix: wrong account used)
 
 **Correctness bug.** A setup-token parallel session launched with only
