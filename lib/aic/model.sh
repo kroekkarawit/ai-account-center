@@ -264,13 +264,14 @@ manage_model_profiles() {
 # a third-party model profile (DeepSeek/custom).
 # Parallel accounts exclude the global-active one and any already running.
 interactive_claude_launch() {
-  local options=() name display base file item key badge kind
+  local options=() name display base file item key badge kind run
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     kind="$(claude_account_kind "$name")"
     badge="$(claude_token_usage_badge "$name")"
-    options+=("$name  —  parallel account ($kind)${badge:+  $badge}::acct:$name")
+    run=""; claude_account_in_session "$name" && run="  ⏵ running"
+    options+=("$name  —  parallel account ($kind)${badge:+  $badge}${run}::acct:$name")
   done < <(claude_parallel_candidates)
 
   while IFS= read -r name; do

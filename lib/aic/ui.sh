@@ -542,8 +542,8 @@ it runs alongside your global account. For Claude it lists:
                       Launched via ANTHROPIC_AUTH_TOKEN (DeepSeek-style env), which
                       overrides the keychain login so the session runs on the
                       selected account with no first-run wizard. The global-active
-                      account and any already-running account are hidden, so the
-                      same account never runs twice.
+                      account is hidden; an account already running is shown but
+                      flagged "running" (never hidden, so it can't vanish).
   Model / provider  - alternate model or API provider (DeepSeek / custom).
 Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
 once as `sk-ant-oat01-...`). Reclaiming: switching globally to an account that is
@@ -656,7 +656,8 @@ RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
   Parallel account - รันอีกบัญชีที่นี่ ใช้ quota ของบัญชีนั้นเอง (เหมาะตอนใกล้ reset
                      รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) เปิดผ่าน ANTHROPIC_AUTH_TOKEN
                      (แบบ DeepSeek) ซึ่ง override keychain จึงรันบัญชีที่เลือกจริงและไม่มี
-                     wizard ตั้งค่า บัญชี global-active และที่รันอยู่แล้วจะถูกซ่อน กันรันซ้ำ
+                     wizard ตั้งค่า บัญชี global-active จะถูกซ่อน ส่วนบัญชีที่รันอยู่แล้วจะแสดง
+                     พร้อมป้าย "running" (ไม่ซ่อน จะได้ไม่หายไป)
   Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
 เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
 การเรียกคืน: ถ้าสลับ global ไปบัญชีที่กำลังรัน parallel อยู่ aic จะถามเพื่อปิด session นั้น

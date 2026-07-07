@@ -151,8 +151,8 @@ claude_token_usage_badge() {
 # Run another Claude account in THIS terminal (its own quota), alongside your
 # global account — e.g. to burn down two accounts at once near a weekly reset.
 # A PID registry (the pid survives exec, so it becomes the launched claude's pid)
-# lets the launcher hide accounts already running, so the same account is never
-# run twice (which would split one quota and, for OAuth, collide on refresh).
+# lets the launcher FLAG an account that's already running — but never hides it,
+# so an account can't mysteriously vanish from the list.
 claude_session_pid_file() { printf '%s/sessions/%s.pid' "$RUNTIME_DIR" "$1"; }
 
 register_claude_session() {
@@ -161,25 +161,30 @@ register_claude_session() {
   printf '%s' "$$" >"$f"   # $$ survives exec → becomes the claude process's pid
 }
 
-# 0 if the account has a live parallel session; prunes a dead registration.
+# 0 if the account has a live parallel session; prunes a dead registration. The
+# pid must still be a claude process — guards against pid reuse falsely flagging
+# (or, for reclaim, killing) an unrelated process.
 claude_account_in_session() {
   local f pid; f="$(claude_session_pid_file "$1")"
   [[ -f "$f" ]] || return 1
   pid="$(cat "$f" 2>/dev/null)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then return 0; fi
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
+     && [[ "$(ps -p "$pid" -o comm= 2>/dev/null)" == *claude* ]]; then
+    return 0
+  fi
   rm -f "$f" 2>/dev/null || true
   return 1
 }
 
-# Accounts eligible to run in parallel: not the global-active account (running it
-# in parallel just splits one quota and risks a refresh collision) and not
-# already running in a session.
+# Accounts eligible to run in parallel: everything except the global-active
+# account (running it in parallel would just split its one quota). An account
+# already running is still listed — the launcher marks it "running" — so it never
+# disappears.
 claude_parallel_candidates() {
   local active name; active="$(active_claude_name)"
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     [[ "$name" == "$active" ]] && continue
-    claude_account_in_session "$name" && continue
     printf '%s\n' "$name"
   done < <(claude_names)
 }
@@ -227,7 +232,9 @@ reclaim_claude_session() {
   pidf="$(claude_session_pid_file "$name")"
   [[ -f "$pidf" ]] || return 0
   pid="$(cat "$pidf" 2>/dev/null)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+  # Only act if the pid is still a live claude process (never kill a reused pid).
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
+     && [[ "$(ps -p "$pid" -o comm= 2>/dev/null)" == *claude* ]]; then
     warn "Account '$name' is running in a parallel session (PID $pid)."
     if [[ "$mode" == "confirm" && -t 0 ]]; then
       local ans

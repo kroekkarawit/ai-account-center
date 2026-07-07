@@ -163,9 +163,9 @@ lists:
   session runs on the account you picked (verified by usage attribution) with
   **no first-run wizard** (it uses your normal Claude config). `CLAUDE_CODE_OAUTH_TOKEN`
   is deliberately *not* used — it doesn't override the keychain and silently
-  burns the wrong account. The **global-active** account and any account
-  **already running** are hidden, so the same account never runs twice. Usage is
-  shown per account.
+  burns the wrong account. The **global-active** account is hidden; an account
+  **already running** in a session is shown but flagged **`⏵ running`** (so it
+  never mysteriously disappears from the list). Usage is shown per account.
 - **Model / provider** — alternate model or API provider (for example DeepSeek),
   applied via environment variables. **+ Add model / API provider** / **Manage
   profiles**.
@@ -174,9 +174,9 @@ Add a setup-token with **+ Add Claude setup-token** (`claude setup-token`, shown
 once as `sk-ant-oat01-...`).
 
 **Reclaiming a parallel account:** an account running in a parallel session is
-marked *in use* and hidden from the parallel list. If you **global-switch** to
-it, aic offers to **terminate that running session** first (these sessions use a
-static token and don't rotate, so nothing needs syncing back). Closing the
+flagged **`⏵ running`** in the list. If you **global-switch** to it, aic offers
+to **terminate that running session** first (these sessions use a static token
+and don't rotate, so nothing needs syncing back). Closing the
 terminal also frees the session.
 
 ### Manage accounts

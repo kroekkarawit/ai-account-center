@@ -8,6 +8,20 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-08 — v0.16.1: Don't hide a running parallel account (it vanished)
+
+A parallel account with a live session was **removed** from the "Run a profile
+session" list (the `claude_account_in_session` filter), so a still-running
+account (e.g. one launched hours ago and left open) looked like it had
+disappeared entirely.
+
+- `claude_parallel_candidates` no longer drops running accounts — it only
+  excludes the global-active one. The launcher instead marks a running account
+  `⏵ running`, so it's always visible.
+- `claude_account_in_session` and `reclaim_claude_session` now require the pid to
+  still be a **claude** process (`ps -p … -o comm=`), so a reused pid can't
+  falsely flag — or, in reclaim, kill — an unrelated process.
+
 ### 2026-07-07 — v0.16.0: Parallel launch via ANTHROPIC_AUTH_TOKEN (the fix that works)
 
 The v0.15.x approaches were wrong. Measured facts:

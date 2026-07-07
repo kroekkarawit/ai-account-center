@@ -644,16 +644,19 @@ jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},c
 clear_active_claude_name
 test "$(claude_account_kind par-a)" = "token"
 test "$(claude_account_kind par-b)" = "oauth"
-# both are candidates when neither active nor running
+# both are candidates when not the global-active account
 test "$(claude_parallel_candidates | grep -c '^par-a$')" = "1"
 test "$(claude_parallel_candidates | grep -c '^par-b$')" = "1"
-# a live session (our own live pid) hides the account
+# a running account is NOT hidden (it stays a candidate, just flagged elsewhere)
 register_claude_session par-a
-test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
-# a dead registration is pruned, so the account is a candidate again
+test "$(claude_parallel_candidates | grep -c '^par-a$')" = "1"
+# claude_account_in_session: a dead pid reports not-running and is pruned
 printf '99999999' >"$(claude_session_pid_file par-b)"
-test "$(claude_parallel_candidates | grep -c '^par-b$')" = "1"
+claude_account_in_session par-b && { echo "FAIL: dead pid reported running"; exit 1; }
 test ! -f "$(claude_session_pid_file par-b)"
+# claude_account_in_session: a live NON-claude pid ($$ = bash) is not a claude session
+test "$(cat "$(claude_session_pid_file par-a)")" = "$$"
+claude_account_in_session par-a && { echo "FAIL: bash pid flagged as claude session"; exit 1; }
 # the global-active account is never a parallel candidate
 rm -f "$(claude_session_pid_file par-a)"
 set_active_claude_name par-a
