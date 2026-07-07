@@ -662,6 +662,46 @@ rm -f "$(claude_session_pid_file par-a)"
 set_active_claude_name par-a
 test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
 clear_active_claude_name
+
+# launch_claude_parallel must be a plain first-party token session: selected
+# token in, ambient keychain/custom-provider env out. This catches the bug where
+# a stale ANTHROPIC_BASE_URL or CLAUDE_CODE_OAUTH_TOKEN could hijack the launch.
+cat >"$TMP/bin/claude" <<'SH'
+#!/usr/bin/env bash
+printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
+printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:-}"
+printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-}"
+printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}"
+printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+printf 'CLAUDE_CODE_USE_BEDROCK=%s\n' "${CLAUDE_CODE_USE_BEDROCK:-}"
+printf 'CLAUDE_CODE_USE_VERTEX=%s\n' "${CLAUDE_CODE_USE_VERTEX:-}"
+printf 'ANTHROPIC_VERTEX_PROJECT_ID=%s\n' "${ANTHROPIC_VERTEX_PROJECT_ID:-}"
+printf 'CLOUD_ML_REGION=%s\n' "${CLOUD_ML_REGION:-}"
+printf 'ARGS=%s\n' "$*"
+SH
+chmod +x "$TMP/bin/claude"
+output="$(
+  ANTHROPIC_AUTH_TOKEN=ambient-auth \
+  ANTHROPIC_API_KEY=ambient-api \
+  ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
+  ANTHROPIC_MODEL=wrong-model \
+  CLAUDE_CODE_OAUTH_TOKEN=ambient-claude-oauth \
+  CLAUDE_CODE_USE_BEDROCK=1 \
+  CLAUDE_CODE_USE_VERTEX=1 \
+  ANTHROPIC_VERTEX_PROJECT_ID=ambient-project \
+  CLOUD_ML_REGION=ambient-region \
+  launch_claude_parallel par-a --print 2>/dev/null
+)"
+assert_contains "$output" "ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-parA"
+assert_contains "$output" "ANTHROPIC_API_KEY="
+assert_contains "$output" "ANTHROPIC_BASE_URL="
+assert_contains "$output" "ANTHROPIC_MODEL="
+assert_contains "$output" "CLAUDE_CODE_OAUTH_TOKEN="
+assert_contains "$output" "CLAUDE_CODE_USE_BEDROCK="
+assert_contains "$output" "CLAUDE_CODE_USE_VERTEX="
+assert_contains "$output" "ANTHROPIC_VERTEX_PROJECT_ID="
+assert_contains "$output" "CLOUD_ML_REGION="
+assert_contains "$output" "ARGS=--print"
 remove_claude par-a >/dev/null; remove_claude par-b >/dev/null
 rm -f "$(claude_session_pid_file par-a)"
 

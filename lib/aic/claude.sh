@@ -190,8 +190,9 @@ claude_parallel_candidates() {
 }
 
 # Run an account in a parallel session in THIS terminal, via ANTHROPIC_AUTH_TOKEN
-# — the DeepSeek-style env launch (like ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
-# for a custom provider). This is the ONE env var that works:
+# — the DeepSeek-style env launch, but for first-party Claude we intentionally
+# scrub any provider/model overrides that might be left in the parent shell.
+# This is the ONE auth env var that works:
 #   • It takes precedence over the keychain login (Claude Code says so on start),
 #     so the session runs on the SELECTED account — verified by usage attribution.
 #     CLAUDE_CODE_OAUTH_TOKEN does NOT override the keychain and silently burns
@@ -211,9 +212,27 @@ launch_claude_parallel() {
   register_claude_session "$name"
   printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota%s\n' \
     "$CYAN" "$name" "$RESET"
-  # Scrub competing auth sources so only our token is used.
-  exec env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
-    -u ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN="$token" claude "$@"
+  # Scrub competing auth/provider sources so only the selected Claude account is
+  # used. A stale ANTHROPIC_BASE_URL from DeepSeek/OpenRouter would otherwise
+  # redirect this first-party setup-token session away from Claude.
+  exec env \
+    -u CLAUDE_CODE_OAUTH_TOKEN \
+    -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
+    -u ANTHROPIC_API_KEY \
+    -u ANTHROPIC_AUTH_TOKEN \
+    -u ANTHROPIC_BASE_URL \
+    -u ANTHROPIC_MODEL \
+    -u ANTHROPIC_DEFAULT_OPUS_MODEL \
+    -u ANTHROPIC_DEFAULT_SONNET_MODEL \
+    -u ANTHROPIC_DEFAULT_HAIKU_MODEL \
+    -u ANTHROPIC_SMALL_FAST_MODEL \
+    -u CLAUDE_CODE_SUBAGENT_MODEL \
+    -u CLAUDE_CODE_USE_BEDROCK \
+    -u CLAUDE_CODE_USE_VERTEX \
+    -u ANTHROPIC_VERTEX_PROJECT_ID \
+    -u CLOUD_ML_REGION \
+    ANTHROPIC_AUTH_TOKEN="$token" \
+    claude "$@"
 }
 
 # Reclaim an account from a parallel session so its refresh chain lives in one

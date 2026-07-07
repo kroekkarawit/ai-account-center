@@ -161,11 +161,13 @@ lists:
   day or two away. It launches via **`ANTHROPIC_AUTH_TOKEN`** — the same
   DeepSeek-style env launch — which **overrides the keychain login**, so the
   session runs on the account you picked (verified by usage attribution) with
-  **no first-run wizard** (it uses your normal Claude config). `CLAUDE_CODE_OAUTH_TOKEN`
-  is deliberately *not* used — it doesn't override the keychain and silently
-  burns the wrong account. The **global-active** account is hidden; an account
-  **already running** in a session is shown but flagged **`⏵ running`** (so it
-  never mysteriously disappears from the list). Usage is shown per account.
+  **no first-run wizard** (it uses your normal Claude config). aic also scrubs
+  custom-provider env such as `ANTHROPIC_BASE_URL`, so a stale DeepSeek/OpenRouter
+  export cannot steal the session. `CLAUDE_CODE_OAUTH_TOKEN` is deliberately
+  *not* used — it doesn't override the keychain and silently burns the wrong
+  account. The **global-active** account is hidden; an account **already
+  running** in a session is shown but flagged **`⏵ running`** (so it never
+  mysteriously disappears from the list). Usage is shown per account.
 - **Model / provider** — alternate model or API provider (for example DeepSeek),
   applied via environment variables. **+ Add model / API provider** / **Manage
   profiles**.

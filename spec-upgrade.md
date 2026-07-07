@@ -8,6 +8,22 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-08 — v0.16.2: Scrub custom-provider env for Claude setup-token sessions
+
+v0.16.0 switched setup-token sessions to `ANTHROPIC_AUTH_TOKEN`, which fixed
+keychain hijacking and the first-run wizard. One leak remained: if the parent
+shell had `ANTHROPIC_BASE_URL` or Bedrock/Vertex/model env vars exported from a
+previous provider session, the selected Claude setup-token could be launched
+against the wrong backend.
+
+- `launch_claude_parallel` now removes custom-provider and model override env
+  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, default model vars, Bedrock/Vertex
+  flags, etc.) before setting `ANTHROPIC_AUTH_TOKEN` to the selected account's
+  token.
+- Added a regression test proving ambient `ANTHROPIC_BASE_URL`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, Bedrock, and Vertex env vars
+  are stripped while the selected setup-token is preserved.
+
 ### 2026-07-08 — v0.16.1: Don't hide a running parallel account (it vanished)
 
 A parallel account with a live session was **removed** from the "Run a profile
