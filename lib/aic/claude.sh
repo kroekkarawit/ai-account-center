@@ -192,7 +192,9 @@ claude_parallel_candidates() {
 # like their normal claude, just credential-isolated. Seeded once; the live
 # session then evolves its own config.
 _seed_claude_session_config() {
-  local dir="$1" cj="$HOME/.claude.json" out="$dir/.claude.json"
+  local dir="$1"
+  local cj="$HOME/.claude.json"
+  local out="$dir/.claude.json"
   mkdir -p "$dir"; chmod 700 "$dir"
   if [[ ! -f "$out" ]]; then
     if [[ -f "$cj" ]] && jq 'del(.oauthAccount, .projects) | .hasCompletedOnboarding = true' "$cj" >"$out.tmp" 2>/dev/null; then
