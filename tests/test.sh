@@ -662,25 +662,13 @@ clear_active_claude_name
 remove_claude par-a >/dev/null; remove_claude par-b >/dev/null
 rm -f "$(claude_session_pid_file par-a)"
 
-# reclaim_claude_session: sync the session's rotated token back to the store and
-# drop the session copy, so no re-import is needed to global-switch afterward.
-jq -n '{claudeAiOauth:{accessToken:"old-ac",refreshToken:"old-rt",expiresAt:0,scopes:[]},organizationUuid:"o",created_at:"t"}' \
+# reclaim_claude_session: a stale (dead-pid) session registration is pruned.
+jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},organizationUuid:"o",created_at:"t"}' \
   >"$AIC_DATA_DIR/accounts/claude/rec-a.json"
-rec_dir="$(claude_session_config_dir rec-a)"; mkdir -p "$rec_dir"
-jq -n '{claudeAiOauth:{accessToken:"new-ac",refreshToken:"new-rt",expiresAt:9,scopes:[]}}' >"$rec_dir/.credentials.json"
 printf '99999998' >"$(claude_session_pid_file rec-a)"   # dead pid → pruned, no kill
 reclaim_claude_session rec-a warn >/dev/null
-test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/rec-a.json")" = "new-rt"  # synced back
 test ! -f "$(claude_session_pid_file rec-a)"   # pid pruned
-test ! -d "$rec_dir"                            # session dir dropped
 remove_claude rec-a >/dev/null
-
-# Parallel session config seed: skip Claude Code's first-run wizard, no identity.
-seed_dir="$AIC_DATA_DIR/sessions/claude-seedtest"; rm -rf "$seed_dir"
-_seed_claude_session_config "$seed_dir"
-test "$(jq -r '.hasCompletedOnboarding' "$seed_dir/.claude.json")" = "true"
-test "$(jq -r 'has("oauthAccount")' "$seed_dir/.claude.json")" = "false"
-rm -rf "$seed_dir"
 
 # Clean up
 remove_claude switch-test >/dev/null

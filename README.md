@@ -158,11 +158,14 @@ lists:
 
 - **Parallel account** — run **another** Claude account right here, on **its own
   quota**. Great for burning down two accounts at once when a weekly reset is a
-  day or two away. Setup-token accounts launch via `CLAUDE_CODE_OAUTH_TOKEN`;
-  full OAuth accounts via an isolated `CLAUDE_CONFIG_DIR` (a real, refreshable
-  session). The **global-active** account and any account **already running** are
-  hidden, so the same account never runs twice (which would split one quota and,
-  for OAuth, collide on refresh). Usage is shown per account.
+  day or two away. It launches via **`ANTHROPIC_AUTH_TOKEN`** — the same
+  DeepSeek-style env launch — which **overrides the keychain login**, so the
+  session runs on the account you picked (verified by usage attribution) with
+  **no first-run wizard** (it uses your normal Claude config). `CLAUDE_CODE_OAUTH_TOKEN`
+  is deliberately *not* used — it doesn't override the keychain and silently
+  burns the wrong account. The **global-active** account and any account
+  **already running** are hidden, so the same account never runs twice. Usage is
+  shown per account.
 - **Model / provider** — alternate model or API provider (for example DeepSeek),
   applied via environment variables. **+ Add model / API provider** / **Manage
   profiles**.
@@ -172,9 +175,9 @@ once as `sk-ant-oat01-...`).
 
 **Reclaiming a parallel account:** an account running in a parallel session is
 marked *in use* and hidden from the parallel list. If you **global-switch** to
-it, aic warns and offers to **terminate that session**, then syncs the session's
-latest (refreshed) token back into the account before switching — so you **never
-re-import**. Closing the terminal also frees the session naturally.
+it, aic offers to **terminate that running session** first (these sessions use a
+static token and don't rotate, so nothing needs syncing back). Closing the
+terminal also frees the session.
 
 ### Manage accounts
 

@@ -8,6 +8,29 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-07 — v0.16.0: Parallel launch via ANTHROPIC_AUTH_TOKEN (the fix that works)
+
+The v0.15.x approaches were wrong. Measured facts:
+- `CLAUDE_CODE_OAUTH_TOKEN=<token> claude` (default config) does **not** override
+  the keychain login — Claude Code runs inference on the ambient keychain account
+  (confirmed: a pthor-labeled run moved teensanook2's `/api/oauth/usage` 58→59%).
+- Isolating via a fresh `CLAUDE_CONFIG_DIR` fixed the account but forced a
+  first-run wizard (theme + login).
+- `ANTHROPIC_AUTH_TOKEN=<token> claude` (DeepSeek-style, no isolation) **does**
+  override the keychain (Claude Code prints "takes precedence over your claude.ai
+  login"), works with a setup-token as a plain Bearer (HTTP 200), runs on the
+  selected account (attribution: teensanook2 flat while pthor was consumed), and
+  uses the normal config so there is **no wizard**.
+
+- `launch_claude_parallel` now unconditionally launches with
+  `env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+  -u ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN=<token> claude` (setup-token uses
+  `.token`; OAuth uses `.claudeAiOauth.accessToken`).
+- Removed the now-dead machinery: `_exec_claude_isolated`,
+  `_seed_claude_session_config`, `_seed_claude_session_dir`,
+  `claude_session_config_dir`, and the per-kind dispatch. `reclaim_claude_session`
+  simplified to terminate-only (static tokens don't rotate → no sync-back).
+
 ### 2026-07-07 — v0.15.3: Seed session config so parallel launch isn't a blank first-run
 
 The v0.15.2 isolation (a dedicated `CLAUDE_CONFIG_DIR`) fixed the wrong-account

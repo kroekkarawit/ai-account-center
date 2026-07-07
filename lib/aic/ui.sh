@@ -160,7 +160,7 @@ manage_account_menu() {
       add_claude_token "$name"
       ;;
     launch-token)
-      launch_claude_with_token "$name"
+      launch_claude_parallel "$name"
       ;;
     remove)
       local answer
@@ -539,11 +539,11 @@ RUN A PROFILE SESSION  (this terminal only)
 it runs alongside your global account. For Claude it lists:
   Parallel account  - run another Claude account here, on ITS OWN quota (great
                       for burning two accounts at once near a weekly reset).
-                      Setup-token accounts launch via CLAUDE_CODE_OAUTH_TOKEN;
-                      OAuth accounts via an isolated CLAUDE_CONFIG_DIR. The
-                      global-active account and any already-running account are
-                      hidden, so the same account never runs twice (which would
-                      split one quota / collide on refresh).
+                      Launched via ANTHROPIC_AUTH_TOKEN (DeepSeek-style env), which
+                      overrides the keychain login so the session runs on the
+                      selected account with no first-run wizard. The global-active
+                      account and any already-running account are hidden, so the
+                      same account never runs twice.
   Model / provider  - alternate model or API provider (DeepSeek / custom).
 Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
 once as `sk-ant-oat01-...`). Reclaiming: switching globally to an account that is
@@ -654,9 +654,9 @@ RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
 "Run a profile session -> Codex / Claude" เปิด CLI สำหรับ terminal เดียว รันคู่ขนานกับ
 บัญชี global ได้ ฝั่ง Claude จะลิสต์:
   Parallel account - รันอีกบัญชีที่นี่ ใช้ quota ของบัญชีนั้นเอง (เหมาะตอนใกล้ reset
-                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) setup-token เปิดผ่าน
-                     CLAUDE_CODE_OAUTH_TOKEN, OAuth เปิดผ่าน CLAUDE_CONFIG_DIR
-                     บัญชี global-active และบัญชีที่รันอยู่แล้วจะถูกซ่อน กันรันซ้ำ
+                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) เปิดผ่าน ANTHROPIC_AUTH_TOKEN
+                     (แบบ DeepSeek) ซึ่ง override keychain จึงรันบัญชีที่เลือกจริงและไม่มี
+                     wizard ตั้งค่า บัญชี global-active และที่รันอยู่แล้วจะถูกซ่อน กันรันซ้ำ
   Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
 เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
 การเรียกคืน: ถ้าสลับ global ไปบัญชีที่กำลังรัน parallel อยู่ aic จะถามเพื่อปิด session นั้น

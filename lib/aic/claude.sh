@@ -102,7 +102,7 @@ sanitize_claude_token() {
 #             switched globally (written to the keychain so every client picks
 #             them up), because the keychain rejects refresh-token-less creds.
 #   "token" — a setup-token (`claude setup-token`). A session credential like an
-#             API key: full Claude, but only per-launch via CLAUDE_CODE_OAUTH_TOKEN.
+#             API key: full Claude, but only per-launch via ANTHROPIC_AUTH_TOKEN.
 claude_account_kind() {
   local file
   file="$(claude_account_file "$1")"
@@ -154,7 +154,6 @@ claude_token_usage_badge() {
 # lets the launcher hide accounts already running, so the same account is never
 # run twice (which would split one quota and, for OAuth, collide on refresh).
 claude_session_pid_file() { printf '%s/sessions/%s.pid' "$RUNTIME_DIR" "$1"; }
-claude_session_config_dir() { printf '%s/sessions/claude-%s' "$DATA_DIR" "$1"; }
 
 register_claude_session() {
   local f; f="$(claude_session_pid_file "$1")"
@@ -185,104 +184,31 @@ claude_parallel_candidates() {
   done < <(claude_names)
 }
 
-# A fresh CLAUDE_CONFIG_DIR is a blank first-run, so Claude Code shows its theme +
-# login wizard. Mirror the user's global config (which already has onboarding
-# done) into the session dir — minus account identity (oauthAccount) and project
-# history — and carry over their settings, so a parallel session starts exactly
-# like their normal claude, just credential-isolated. Seeded once; the live
-# session then evolves its own config.
-_seed_claude_session_config() {
-  local dir="$1"
-  local cj="$HOME/.claude.json"
-  local out="$dir/.claude.json"
-  mkdir -p "$dir"; chmod 700 "$dir"
-  if [[ ! -f "$out" ]]; then
-    if [[ -f "$cj" ]] && jq 'del(.oauthAccount, .projects) | .hasCompletedOnboarding = true' "$cj" >"$out.tmp" 2>/dev/null; then
-      mv -f "$out.tmp" "$out"
-    else
-      rm -f "$out.tmp" 2>/dev/null
-      printf '{"hasCompletedOnboarding":true,"theme":"dark","numStartups":1}' >"$out"
-    fi
-    chmod 600 "$out"
-  fi
-  if [[ -f "$HOME/.claude/settings.json" && ! -f "$dir/settings.json" ]]; then
-    cp "$HOME/.claude/settings.json" "$dir/settings.json" 2>/dev/null && chmod 600 "$dir/settings.json"
-  fi
-}
-
-# Seed an isolated CLAUDE_CONFIG_DIR with the account's OAuth credential — only on
-# first use. After that the session dir owns its own (self-refreshing) token
-# chain, so we never overwrite a token the live session has already rotated.
-_seed_claude_session_dir() {
-  local name="$1" dir="$2" oauth
-  mkdir -p "$dir"; chmod 700 "$dir"
-  if [[ ! -f "$dir/.credentials.json" ]]; then
-    oauth="$(jq -c '.claudeAiOauth // empty' "$(claude_account_file "$name")")"
-    [[ -n "$oauth" ]] || die "Account '$name' has no OAuth credentials."
-    jq -n --argjson o "$oauth" '{claudeAiOauth:$o}' >"$dir/.credentials.json"
-    chmod 600 "$dir/.credentials.json"
-  fi
-}
-
-# exec claude for a parallel session in an ISOLATED config dir with all foreign
-# auth env vars scrubbed. Isolation is essential: a bare CLAUDE_CODE_OAUTH_TOKEN
-# does NOT override the ambient keychain login — Claude Code uses the keychain
-# account for inference, so the session silently runs on (and burns) the WRONG
-# account. A dedicated CLAUDE_CONFIG_DIR has no ambient login, so the credential
-# we set is the only one. Extra env assignments (e.g. CLAUDE_CODE_OAUTH_TOKEN=…)
-# are passed as leading args and win over the -u that precedes them.
-_exec_claude_isolated() {
-  local dir="$1"; shift
-  exec env \
-    -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
-    -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-    CLAUDE_CONFIG_DIR="$dir" "$@"
-}
-
-# Parallel session for a setup-token account (static token → no refresh, no
-# collision; safe to run many at once). Isolated so the ambient keychain login
-# can't hijack it — the setup-token is the only credential in this config dir.
-launch_claude_with_token() {
+# Run an account in a parallel session in THIS terminal, via ANTHROPIC_AUTH_TOKEN
+# — the DeepSeek-style env launch (like ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+# for a custom provider). This is the ONE env var that works:
+#   • It takes precedence over the keychain login (Claude Code says so on start),
+#     so the session runs on the SELECTED account — verified by usage attribution.
+#     CLAUDE_CODE_OAUTH_TOKEN does NOT override the keychain and silently burns
+#     the wrong account, which is why we don't use it.
+#   • It needs no CLAUDE_CONFIG_DIR isolation, so there is NO first-run wizard.
+# Setup-tokens are long-lived; an OAuth account uses its stored access token
+# (valid for its current window — re-import/switch to refresh if it has expired).
+launch_claude_parallel() {
   local name="$1"; shift
   validate_name "$name"
-  local file token dir
+  local file token
   file="$(claude_account_file "$name")"
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   token="$(sanitize_claude_token "$(jq -r '.token // .claudeAiOauth.accessToken // empty' "$file")")"
   [[ -n "$token" ]] || die "Account '$name' has no usable token."
   require_command claude
-  dir="$(claude_session_config_dir "$name")"
-  _seed_claude_session_config "$dir"
   register_claude_session "$name"
-  printf '%sLaunching Claude  ·  parallel (setup-token): %s  ·  this terminal, own quota%s\n' \
+  printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota%s\n' \
     "$CYAN" "$name" "$RESET"
-  _exec_claude_isolated "$dir" CLAUDE_CODE_OAUTH_TOKEN="$token" claude "$@"
-}
-
-# Parallel session for a full OAuth account, isolated via CLAUDE_CONFIG_DIR so it
-# refreshes independently of your global keychain login.
-launch_claude_oauth_session() {
-  local name="$1"; shift
-  validate_name "$name"
-  [[ -f "$(claude_account_file "$name")" ]] || die "Unknown Claude account: $name"
-  require_command claude
-  local dir; dir="$(claude_session_config_dir "$name")"
-  _seed_claude_session_config "$dir"
-  _seed_claude_session_dir "$name" "$dir"
-  register_claude_session "$name"
-  printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota (keychain untouched)%s\n' \
-    "$CYAN" "$name" "$RESET"
-  _exec_claude_isolated "$dir" claude "$@"
-}
-
-# Dispatch a parallel launch by credential kind.
-launch_claude_parallel() {
-  local name="$1"; shift
-  case "$(claude_account_kind "$name")" in
-    token) launch_claude_with_token "$name" "$@" ;;
-    oauth) launch_claude_oauth_session "$name" "$@" ;;
-    *) die "Unknown Claude account: $name" ;;
-  esac
+  # Scrub competing auth sources so only our token is used.
+  exec env -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
+    -u ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN="$token" claude "$@"
 }
 
 # Reclaim an account from a parallel session so its refresh chain lives in one
@@ -291,44 +217,31 @@ launch_claude_parallel() {
 # copy. This is what removes the "re-import to switch later" caveat — the token
 # the session rotated forward is written back before we hand the account to the
 # global keychain. Returns 1 only if the user declines to terminate a live session.
+# If an account is running in a parallel session, offer to terminate it (so
+# global-switching to it takes over cleanly). ANTHROPIC_AUTH_TOKEN sessions use a
+# static token and never rotate the stored credential, so there is nothing to
+# sync back — we just stop the process. Returns 1 only if the user declines.
 reclaim_claude_session() {
   local name="$1" mode="${2:-warn}"
-  local pidf sessdir sesscreds pid
+  local pidf pid
   pidf="$(claude_session_pid_file "$name")"
-  sessdir="$(claude_session_config_dir "$name")"
-  sesscreds="$sessdir/.credentials.json"
-
-  if [[ -f "$pidf" ]]; then
-    pid="$(cat "$pidf" 2>/dev/null)"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-      warn "Account '$name' is running in a parallel session (PID $pid)."
-      if [[ "$mode" == "confirm" && -t 0 ]]; then
-        local ans
-        ans="$(choose_from "Terminate that session and take '$name' global?" \
-          "No, cancel" "Yes, terminate it")" || return 1
-        [[ "$ans" == Yes* ]] || return 1
-      fi
-      kill "$pid" 2>/dev/null || true
-      local i
-      for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
-      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-      printf 'Terminated parallel session for %s.\n' "$name"
+  [[ -f "$pidf" ]] || return 0
+  pid="$(cat "$pidf" 2>/dev/null)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    warn "Account '$name' is running in a parallel session (PID $pid)."
+    if [[ "$mode" == "confirm" && -t 0 ]]; then
+      local ans
+      ans="$(choose_from "Terminate that session and take '$name' global?" \
+        "No, cancel" "Yes, terminate it")" || return 1
+      [[ "$ans" == Yes* ]] || return 1
     fi
-    rm -f "$pidf" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    printf 'Terminated parallel session for %s.\n' "$name"
   fi
-
-  # Write the session's (rotated-forward) credential back to the store, then drop
-  # the session copy so the chain isn't held in two places.
-  if [[ -f "$sesscreds" ]]; then
-    local oauth dest
-    oauth="$(jq -c '.claudeAiOauth // empty' "$sesscreds" 2>/dev/null)"
-    dest="$(claude_account_file "$name")"
-    if [[ -n "$oauth" && -f "$dest" ]]; then
-      jq --argjson o "$oauth" '.claudeAiOauth = $o' "$dest" >"$dest.tmp" 2>/dev/null &&
-        chmod 600 "$dest.tmp" && mv -f "$dest.tmp" "$dest"
-    fi
-    rm -rf "$sessdir" 2>/dev/null || true
-  fi
+  rm -f "$pidf" 2>/dev/null || true
   return 0
 }
 
@@ -720,7 +633,6 @@ remove_claude() {
   file="$(claude_account_file "$name")"
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   rm -f "$file" "$(usage_file claude "$name")" "$(claude_session_pid_file "$name")"
-  rm -rf "$(claude_session_config_dir "$name")"
   printf 'Removed Claude account: %s\n' "$name"
 }
 
