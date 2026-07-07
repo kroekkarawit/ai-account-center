@@ -8,6 +8,28 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-07 — v0.15.2: Isolate parallel launches (fix: wrong account used)
+
+**Correctness bug.** A setup-token parallel session launched with only
+`CLAUDE_CODE_OAUTH_TOKEN` set was silently hijacked by the ambient keychain
+login: Claude Code used the *keychain* account for inference (confirmed — a
+default config dir shows `loggedIn:true, email:<keychain account>`, while a fresh
+`CLAUDE_CONFIG_DIR` shows `loggedIn:false`). So picking account A in "Run a
+profile session" burned account B's quota.
+
+- New `_exec_claude_isolated`: every parallel launch now runs in a dedicated
+  `CLAUDE_CONFIG_DIR` (no ambient login) with foreign auth env vars scrubbed
+  (`CLAUDE_CODE_OAUTH_TOKEN[_FILE_DESCRIPTOR]`, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`). `env -u X X=val` re-adds the one we want.
+- `launch_claude_with_token` now sets `CLAUDE_CONFIG_DIR` + the token, so the
+  setup-token is the *only* credential in that config namespace.
+- Verified: isolated dir without the token → `loggedIn:false`; with the token →
+  `loggedIn:true` ⇒ the session runs on the selected account, not the keychain.
+- Note: the setup-token usage shown on the dashboard is the `/v1/messages`
+  unified header, a different dimension from the subscription session limit — it
+  can read low even when the account's real session usage is high (separate
+  monitoring gap, tracked for the error-classification work).
+
 ### 2026-07-07 — v0.15.1: Reclaim a parallel account (terminate + sync-back)
 
 Removes the v0.15.0 "re-import to switch later" caveat. An OAuth account run in

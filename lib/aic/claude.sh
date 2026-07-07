@@ -199,21 +199,39 @@ _seed_claude_session_dir() {
   fi
 }
 
+# exec claude for a parallel session in an ISOLATED config dir with all foreign
+# auth env vars scrubbed. Isolation is essential: a bare CLAUDE_CODE_OAUTH_TOKEN
+# does NOT override the ambient keychain login — Claude Code uses the keychain
+# account for inference, so the session silently runs on (and burns) the WRONG
+# account. A dedicated CLAUDE_CONFIG_DIR has no ambient login, so the credential
+# we set is the only one. Extra env assignments (e.g. CLAUDE_CODE_OAUTH_TOKEN=…)
+# are passed as leading args and win over the -u that precedes them.
+_exec_claude_isolated() {
+  local dir="$1"; shift
+  exec env \
+    -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR \
+    -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+    CLAUDE_CONFIG_DIR="$dir" "$@"
+}
+
 # Parallel session for a setup-token account (static token → no refresh, no
-# collision; safe to run many at once).
+# collision; safe to run many at once). Isolated so the ambient keychain login
+# can't hijack it — the setup-token is the only credential in this config dir.
 launch_claude_with_token() {
   local name="$1"; shift
   validate_name "$name"
-  local file token
+  local file token dir
   file="$(claude_account_file "$name")"
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   token="$(sanitize_claude_token "$(jq -r '.token // .claudeAiOauth.accessToken // empty' "$file")")"
   [[ -n "$token" ]] || die "Account '$name' has no usable token."
   require_command claude
+  dir="$(claude_session_config_dir "$name")"
+  mkdir -p "$dir"; chmod 700 "$dir"
   register_claude_session "$name"
   printf '%sLaunching Claude  ·  parallel (setup-token): %s  ·  this terminal, own quota%s\n' \
     "$CYAN" "$name" "$RESET"
-  exec env CLAUDE_CODE_OAUTH_TOKEN="$token" claude "$@"
+  _exec_claude_isolated "$dir" CLAUDE_CODE_OAUTH_TOKEN="$token" claude "$@"
 }
 
 # Parallel session for a full OAuth account, isolated via CLAUDE_CONFIG_DIR so it
@@ -228,7 +246,7 @@ launch_claude_oauth_session() {
   register_claude_session "$name"
   printf '%sLaunching Claude  ·  parallel account: %s  ·  this terminal, own quota (keychain untouched)%s\n' \
     "$CYAN" "$name" "$RESET"
-  exec env CLAUDE_CONFIG_DIR="$dir" claude "$@"
+  _exec_claude_isolated "$dir" claude "$@"
 }
 
 # Dispatch a parallel launch by credential kind.
