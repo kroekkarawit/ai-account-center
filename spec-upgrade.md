@@ -8,6 +8,52 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-08 — v0.16.4: Setup-token profile sessions use `.credentials.json`, not auth-token env
+
+The `CLAUDE_CODE_OAUTH_TOKEN` rollback in v0.16.3 avoided API billing, but still
+left account selection dependent on a launch-time token env var and Claude Code's
+macOS keychain behavior. Public multi-account tools such as `claude-swap` use a
+more robust model: launch Claude with a per-account `CLAUDE_CONFIG_DIR` and seed
+that profile's `.credentials.json`.
+
+- Setup-token sessions now write an OAuth-shaped credential:
+  `{claudeAiOauth:{accessToken,refreshToken:"",expiresAt:0,scopes:["user:inference"]}}`.
+- `launch_claude_parallel` no longer passes setup-token material through either
+  `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`.
+- The isolated launch scrubs API/custom-provider env (`ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  token file descriptors, Bedrock/Vertex flags, and model overrides) so a stale
+  provider shell cannot hijack the session.
+- On macOS, aic best-effort deletes the hashed per-`CLAUDE_CONFIG_DIR` Keychain
+  entry before re-seeding changed credentials, because Claude Code reads that
+  entry before the plaintext seed.
+- Preflight calls `claude auth status --json` inside the same isolated profile
+  and warns if the profile is not logged in or appears to be API/custom-token
+  billing. If Claude `/status` shows **API Usage Billing**, the session is wrong.
+- Reclaim now reads a session's current credential from the per-profile Keychain
+  on macOS before falling back to `.credentials.json`, so OAuth token rotations
+  can still sync back.
+
+### 2026-07-08 — v0.16.3: Setup-token sessions are subscription OAuth, not API billing
+
+v0.16.0/v0.16.2 used `ANTHROPIC_AUTH_TOKEN` because it avoided both keychain
+hijack and first-run onboarding. That was the wrong billing mode: Claude Code
+shows those sessions as **API Usage Billing** and reports dollar cost in
+`/usage`, while the stored setup-token subscription usage does not move.
+
+- Setup-token sessions now use `CLAUDE_CODE_OAUTH_TOKEN=<setup-token>` again,
+  but inside an isolated `CLAUDE_CONFIG_DIR` so the ambient keychain login cannot
+  hijack inference.
+- The isolated config dir is pre-seeded/repaired from the user's normal Claude
+  config with `hasCompletedOnboarding=true` and no `oauthAccount`/`projects`, so
+  it should not show the theme/login first-run wizard.
+- The launch still scrubs custom provider/model env (`ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_AUTH_TOKEN`, Bedrock/Vertex flags, etc.) so DeepSeek/OpenRouter
+  exports cannot steal the session.
+- Added regression coverage that fails if setup-token launch uses
+  `ANTHROPIC_AUTH_TOKEN` instead of `CLAUDE_CODE_OAUTH_TOKEN`, or if the isolated
+  config is not seeded.
+
 ### 2026-07-08 — v0.16.2: Scrub custom-provider env for Claude setup-token sessions
 
 v0.16.0 switched setup-token sessions to `ANTHROPIC_AUTH_TOKEN`, which fixed

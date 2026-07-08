@@ -663,9 +663,10 @@ set_active_claude_name par-a
 test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
 clear_active_claude_name
 
-# launch_claude_parallel must be a plain first-party token session: selected
-# token in, ambient keychain/custom-provider env out. This catches the bug where
-# a stale ANTHROPIC_BASE_URL or CLAUDE_CODE_OAUTH_TOKEN could hijack the launch.
+# launch_claude_parallel must seed Claude Code's credential profile, not pass
+# setup-token material through env. ANTHROPIC_AUTH_TOKEN reports as API Usage
+# Billing, and CLAUDE_CODE_OAUTH_TOKEN can be shadowed by macOS keychain state.
+# The isolated, seeded config dir is the auth boundary for this terminal.
 cat >"$TMP/bin/claude" <<'SH'
 #!/usr/bin/env bash
 printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
@@ -673,6 +674,8 @@ printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:-}"
 printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-}"
 printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL:-}"
 printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+printf 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR=%s\n' "${CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR:-}"
+printf 'CLAUDE_CONFIG_DIR=%s\n' "${CLAUDE_CONFIG_DIR:-}"
 printf 'CLAUDE_CODE_USE_BEDROCK=%s\n' "${CLAUDE_CODE_USE_BEDROCK:-}"
 printf 'CLAUDE_CODE_USE_VERTEX=%s\n' "${CLAUDE_CODE_USE_VERTEX:-}"
 printf 'ANTHROPIC_VERTEX_PROJECT_ID=%s\n' "${ANTHROPIC_VERTEX_PROJECT_ID:-}"
@@ -686,22 +689,31 @@ output="$(
   ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
   ANTHROPIC_MODEL=wrong-model \
   CLAUDE_CODE_OAUTH_TOKEN=ambient-claude-oauth \
+  CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR=3 \
   CLAUDE_CODE_USE_BEDROCK=1 \
   CLAUDE_CODE_USE_VERTEX=1 \
   ANTHROPIC_VERTEX_PROJECT_ID=ambient-project \
   CLOUD_ML_REGION=ambient-region \
   launch_claude_parallel par-a --print 2>/dev/null
 )"
-assert_contains "$output" "ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-parA"
+assert_contains "$output" "ANTHROPIC_AUTH_TOKEN="
 assert_contains "$output" "ANTHROPIC_API_KEY="
 assert_contains "$output" "ANTHROPIC_BASE_URL="
 assert_contains "$output" "ANTHROPIC_MODEL="
 assert_contains "$output" "CLAUDE_CODE_OAUTH_TOKEN="
+assert_contains "$output" "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR="
+assert_contains "$output" "CLAUDE_CONFIG_DIR=$AIC_DATA_DIR/sessions/claude-par-a"
 assert_contains "$output" "CLAUDE_CODE_USE_BEDROCK="
 assert_contains "$output" "CLAUDE_CODE_USE_VERTEX="
 assert_contains "$output" "ANTHROPIC_VERTEX_PROJECT_ID="
 assert_contains "$output" "CLOUD_ML_REGION="
 assert_contains "$output" "ARGS=--print"
+test "$(jq -r '.hasCompletedOnboarding' "$AIC_DATA_DIR/sessions/claude-par-a/.claude.json")" = "true"
+test "$(jq -r 'has("oauthAccount")' "$AIC_DATA_DIR/sessions/claude-par-a/.claude.json")" = "false"
+test "$(jq -r '.claudeAiOauth.accessToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "sk-ant-oat01-parA"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = ""
+test "$(jq -r '.claudeAiOauth.expiresAt' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "0"
+test "$(jq -r '.claudeAiOauth.scopes[0]' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "user:inference"
 remove_claude par-a >/dev/null; remove_claude par-b >/dev/null
 rm -f "$(claude_session_pid_file par-a)"
 
@@ -712,6 +724,28 @@ printf '99999998' >"$(claude_session_pid_file rec-a)"   # dead pid → pruned, n
 reclaim_claude_session rec-a warn >/dev/null
 test ! -f "$(claude_session_pid_file rec-a)"   # pid pruned
 remove_claude rec-a >/dev/null
+
+# OAuth session reclaim syncs a rotated credential chain back before removing
+# the isolated session dir.
+jq -n '{claudeAiOauth:{accessToken:"old-ac",refreshToken:"old-rt",expiresAt:0,scopes:[]},organizationUuid:"o",created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/rec-sync.json"
+rec_dir="$(claude_session_config_dir rec-sync)"
+mkdir -p "$rec_dir"
+jq -n '{claudeAiOauth:{accessToken:"new-ac",refreshToken:"new-rt",expiresAt:9,scopes:[]}}' >"$rec_dir/.credentials.json"
+reclaim_claude_session rec-sync warn >/dev/null
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/rec-sync.json")" = "new-rt"
+test ! -d "$rec_dir"
+remove_claude rec-sync >/dev/null
+
+# Setup-token session reclaim keeps the stored token field authoritative.
+printf 'sk-ant-oat01-rec-old\n' | add_claude_token rec-token >/dev/null
+rec_dir="$(claude_session_config_dir rec-token)"
+mkdir -p "$rec_dir"
+jq -n '{claudeAiOauth:{accessToken:"sk-ant-oat01-rec-new",refreshToken:"",expiresAt:0,scopes:["user:inference"]}}' >"$rec_dir/.credentials.json"
+reclaim_claude_session rec-token warn >/dev/null
+test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/rec-token.json")" = "sk-ant-oat01-rec-new"
+test ! -d "$rec_dir"
+remove_claude rec-token >/dev/null
 
 # Clean up
 remove_claude switch-test >/dev/null

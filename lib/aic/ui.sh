@@ -518,9 +518,9 @@ ACCOUNTS vs SETUP-TOKENS  (Claude)
   Account (OAuth login)  - has a refresh token; switches GLOBALLY (written to
                            the keychain, so every terminal + VS Code + extension
                            uses it). Add under "Add account -> Claude".
-  Setup-token            - a session credential like an API key. Full Claude
-                           (Opus/Sonnet, subagents, all tools) but only for the
-                           session you launch with it; other clients are
+  Setup-token            - a session-only Claude subscription credential. Full
+                           Claude (Opus/Sonnet, subagents, all tools) but only
+                           for the session you launch with it; other clients are
                            untouched. Add/run under "Run a profile session".
 
 ADD A CLAUDE ACCOUNT (global switch)
@@ -539,11 +539,14 @@ RUN A PROFILE SESSION  (this terminal only)
 it runs alongside your global account. For Claude it lists:
   Parallel account  - run another Claude account here, on ITS OWN quota (great
                       for burning two accounts at once near a weekly reset).
-                      Launched via ANTHROPIC_AUTH_TOKEN (DeepSeek-style env), which
-                      overrides the keychain login so the session runs on the
-                      selected account with no first-run wizard. The global-active
-                      account is hidden; an account already running is shown but
-                      flagged "running" (never hidden, so it can't vanish).
+                      Setup-tokens launch from an isolated, pre-seeded
+                      CLAUDE_CONFIG_DIR containing .credentials.json, so they
+                      use subscription OAuth quota, avoid keychain hijack, and
+                      skip the first-run wizard. ANTHROPIC_AUTH_TOKEN is not
+                      used here; if Claude /status shows API Usage Billing,
+                      close that session because it is the wrong auth path.
+                      The global-active account is hidden; an account already
+                      running is shown but flagged "running" (never hidden).
   Model / provider  - alternate model or API provider (DeepSeek / custom).
 Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
 once as `sk-ant-oat01-...`). Reclaiming: switching globally to an account that is
@@ -634,7 +637,7 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
   บัญชี (OAuth login) - มี refresh token สลับได้ระดับ GLOBAL (เขียนลง keychain
                         ทุก terminal + VS Code + extension จะใช้บัญชีนี้)
                         เพิ่มที่ "Add account -> Claude"
-  Setup-token         - เป็น session credential เหมือน API key ใช้ Claude ได้เต็ม
+  Setup-token         - เป็น session credential ของ Claude subscription ใช้ Claude ได้เต็ม
                         (Opus/Sonnet, subagent, ทุก tool) แต่เฉพาะ session ที่เปิด
                         เท่านั้น client อื่นไม่กระทบ เพิ่ม/เปิดที่
                         "Run a profile session"
@@ -654,10 +657,13 @@ RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
 "Run a profile session -> Codex / Claude" เปิด CLI สำหรับ terminal เดียว รันคู่ขนานกับ
 บัญชี global ได้ ฝั่ง Claude จะลิสต์:
   Parallel account - รันอีกบัญชีที่นี่ ใช้ quota ของบัญชีนั้นเอง (เหมาะตอนใกล้ reset
-                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) เปิดผ่าน ANTHROPIC_AUTH_TOKEN
-                     (แบบ DeepSeek) ซึ่ง override keychain จึงรันบัญชีที่เลือกจริงและไม่มี
-                     wizard ตั้งค่า บัญชี global-active จะถูกซ่อน ส่วนบัญชีที่รันอยู่แล้วจะแสดง
-                     พร้อมป้าย "running" (ไม่ซ่อน จะได้ไม่หายไป)
+                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) setup-token เปิดจาก
+                     CLAUDE_CONFIG_DIR แยกที่ seed .credentials.json ไว้แล้ว จึงใช้ quota
+                     subscription OAuth, ไม่โดน keychain hijack, และไม่ขึ้น wizard ตั้งค่า
+                     path นี้ไม่ใช้ ANTHROPIC_AUTH_TOKEN; ถ้า Claude /status แสดง
+                     API Usage Billing ให้ปิด session นั้น เพราะเปิดผิด auth path
+                     บัญชี global-active จะถูกซ่อน ส่วนบัญชีที่รันอยู่แล้วจะแสดงพร้อมป้าย
+                     "running" (ไม่ซ่อน จะได้ไม่หายไป)
   Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
 เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
 การเรียกคืน: ถ้าสลับ global ไปบัญชีที่กำลังรัน parallel อยู่ aic จะถามเพื่อปิด session นั้น

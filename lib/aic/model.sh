@@ -260,8 +260,9 @@ manage_model_profiles() {
 }
 
 # Run a profile session → Claude. Runs a per-session Claude in THIS terminal:
-# a parallel Claude account (its own quota, launched via ANTHROPIC_AUTH_TOKEN) or
-# a third-party model profile (DeepSeek/custom).
+# a parallel Claude account (its own quota, launched from an isolated
+# CLAUDE_CONFIG_DIR credential profile) or a third-party model profile
+# (DeepSeek/custom).
 # Parallel accounts exclude the global-active one; running accounts stay visible
 # and are flagged in the menu.
 interactive_claude_launch() {
