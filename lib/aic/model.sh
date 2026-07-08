@@ -260,7 +260,7 @@ manage_model_profiles() {
 }
 
 # Run a profile session → Claude. Runs a per-session Claude in THIS terminal:
-# a parallel Claude account (its own quota, launched from an isolated
+# a parallel OAuth Claude account (its own quota, launched from an isolated
 # CLAUDE_CONFIG_DIR credential profile) or a third-party model profile
 # (DeepSeek/custom).
 # Parallel accounts exclude the global-active one; running accounts stay visible
@@ -284,14 +284,12 @@ interactive_claude_launch() {
     options+=("$name  —  $display ($base)::prof:$name")
   done < <(model_profile_names)
 
-  options+=("＋ Add Claude setup-token::__addtok__")
   options+=("＋ Add model / API provider::__addprof__")
   options+=("⚙ Manage model profiles::__manage__")
 
   item="$(choose_from "Run a profile session" "${options[@]}")" || return 1
   key="${item##*::}"
   case "$key" in
-    __addtok__)  printf 'Name for this setup-token: '; IFS= read -r name; add_claude_token "$name" ;;
     __addprof__) add_model_profile ;;
     __manage__)  manage_model_profiles ;;
     acct:*) launch_claude_parallel "${key#acct:}" ;;

@@ -299,8 +299,18 @@ output="$(codex_names)"
 assert_contains "$output" "personal"
 assert_contains "$output" "company"
 
-printf 'claude-test-token\n' | add_claude_token personal >/dev/null
-test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/personal.json")" = "claude-test-token"
+jq -n '{
+  claudeAiOauth:{
+    accessToken:"claude-test-token",
+    refreshToken:"claude-refresh-token",
+    expiresAt:4102444800000,
+    scopes:["user:inference","user:profile"]
+  },
+  organizationUuid:"org-personal",
+  created_at:"2026-01-01T00:00:00Z"
+}' >"$AIC_DATA_DIR/accounts/claude/personal.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/personal.json"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/personal.json")" = "claude-refresh-token"
 
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "CODEX"
@@ -358,45 +368,18 @@ SH
 chmod +x "$TMP/bin/curl"
 
 "$ROOT/bin/aic" refresh claude personal
+test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "usage_endpoint"
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "96"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "87"
 
-cat >"$TMP/bin/curl" <<'SH'
-#!/usr/bin/env bash
-if [[ "$*" == *"/api/oauth/usage"* ]]; then
-  printf '%s\n' '{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}'
-  exit 0
-fi
-
-headers=""
-body=""
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    -D) headers="$2"; shift 2 ;;
-    -o) body="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat >"$headers" <<'HEADERS'
-HTTP/2 200
-anthropic-ratelimit-unified-5h-reset: 1781506200
-anthropic-ratelimit-unified-5h-utilization: 0.06
-anthropic-ratelimit-unified-7d-reset: 1781942400
-anthropic-ratelimit-unified-7d-utilization: 0.12
-HEADERS
-printf '%s\n' '{"content":[{"type":"text","text":"1"}]}' >"$body"
-printf '200'
-SH
-chmod +x "$TMP/bin/curl"
-
-"$ROOT/bin/aic" refresh claude personal
-test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "inference_headers"
-test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "94"
-test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "88"
-
 # Claude recommendation/scoring — parity with Codex. Add a heavily-used second
 # account; the lightly-used one must win and be marked best.
-printf 'claude-work-token\n' | add_claude_token work >/dev/null
+jq -n '{
+  claudeAiOauth:{accessToken:"claude-work-token",refreshToken:"claude-work-refresh",expiresAt:4102444800000,scopes:["user:inference","user:profile"]},
+  organizationUuid:"org-work",
+  created_at:"2026-01-01T00:00:00Z"
+}' >"$AIC_DATA_DIR/accounts/claude/work.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/work.json"
 jq '.account = "work" |
     .limits.five_hour.used_percent = 82 |
     .limits.weekly.used_percent = 91 |
@@ -409,22 +392,17 @@ assert_contains "$output" "★ best"
 test "$(best_claude_recommendation | cut -f1)" = "personal"
 rm -f "$AIC_DATA_DIR/accounts/claude/work.json" "$AIC_DATA_DIR/usage/claude-work.json"
 
-# Account-kind classification: setup-token vs OAuth login.
-test "$(claude_account_kind personal)" = "token"
+# Account-kind classification: full OAuth login vs unsupported legacy token.
+test "$(claude_account_kind personal)" = "oauth"
 jq -n '{claudeAiOauth:{accessToken:"sk-ant-oat01-a",refreshToken:"sk-ant-ort01-r",expiresAt:0,scopes:["user:inference"]},organizationUuid:"o",created_at:"t"}' \
   > "$AIC_DATA_DIR/accounts/claude/oauthy.json"
+jq -n '{token:"sk-ant-oat01-legacy",created_at:"t"}' >"$AIC_DATA_DIR/accounts/claude/legacy-token.json"
 test "$(claude_account_kind oauthy)" = "oauth"
+test "$(claude_account_kind legacy-token)" = "unsupported"
 test "$(claude_oauth_names | grep -c '^oauthy$')" = "1"
-test "$(claude_token_names | grep -c '^personal$')" = "1"
-test "$(claude_oauth_names | grep -c '^personal$')" = "0"
-
-# Clobber guard: add_claude_token must REFUSE to overwrite an OAuth account
-# (a bare setup-token would strip its refresh token and break global switching).
-if printf 'sk-ant-oat01-new\n' | add_claude_token oauthy >/dev/null 2>&1; then
-  echo "FAIL: add_claude_token overwrote an OAuth account"; exit 1
-fi
-test "$(claude_account_kind oauthy)" = "oauth"
-rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json"
+test "$(claude_oauth_names | grep -c '^personal$')" = "1"
+test "$(claude_oauth_names | grep -c '^legacy-token$')" = "0"
+rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude/legacy-token.json"
 
 # Import a full OAuth login from a base64 keychain blob (another machine).
 blob_json='{"claudeAiOauth":{"accessToken":"sk-ant-oat01-imp","refreshToken":"sk-ant-ort01-imp","expiresAt":1783342808084,"scopes":["user:inference","user:profile"],"subscriptionType":"pro"},"mcpOAuth":{}}'
@@ -432,7 +410,7 @@ blob_b64="$(printf '%s' "$blob_json" | base64 | tr -d '\n')"
 printf '%s\n' "$blob_b64" | import_claude_oauth_blob imported >/dev/null
 test "$(claude_account_kind imported)" = "oauth"
 test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/imported.json")" = "sk-ant-ort01-imp"
-# A blob without a refresh token (setup-token shape) must be rejected.
+# A blob without a refresh token must be rejected.
 notoken_b64="$(printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}' | base64 | tr -d '\n')"
 if printf '%s\n' "$notoken_b64" | import_claude_oauth_blob rejectme >/dev/null 2>&1; then
   echo "FAIL: imported a credential with no refresh token"; exit 1
@@ -440,82 +418,12 @@ fi
 test ! -f "$AIC_DATA_DIR/accounts/claude/rejectme.json"
 rm -f "$AIC_DATA_DIR/accounts/claude/imported.json"
 
-# At 100% usage the probe is rejected with HTTP 429, but Anthropic still returns
-# the rate-limit headers. Those must be trusted (100% used + reset), not shown
-# as an error.
-cat >"$TMP/bin/curl" <<'SH'
-#!/usr/bin/env bash
-if [[ "$*" == *"/api/oauth/usage"* ]]; then
-  printf '%s\n' '{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}'
-  exit 0
-fi
-headers=""
-body=""
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    -D) headers="$2"; shift 2 ;;
-    -o) body="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat >"$headers" <<'HEADERS'
-HTTP/2 429
-anthropic-ratelimit-unified-5h-status: rejected
-anthropic-ratelimit-unified-5h-reset: 1781506200
-anthropic-ratelimit-unified-5h-utilization: 1.0
-anthropic-ratelimit-unified-7d-status: allowed
-anthropic-ratelimit-unified-7d-reset: 1781942400
-anthropic-ratelimit-unified-7d-utilization: 0.5
-HEADERS
-printf '%s\n' '{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account rate limit."}}' >"$body"
-printf '429'
-SH
-chmod +x "$TMP/bin/curl"
-
-"$ROOT/bin/aic" refresh claude personal
-test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-personal.json")" = "ok"
-test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "inference_headers"
-test "$(jq -r '.limits.five_hour.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "100"
-test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "0"
-test "$(jq -r '.limits.weekly.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "50"
-
-# Restore the 94/88 usage record so later status assertions are unaffected.
-cat >"$TMP/bin/curl" <<'SH'
-#!/usr/bin/env bash
-if [[ "$*" == *"/api/oauth/usage"* ]]; then
-  printf '%s\n' '{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}'
-  exit 0
-fi
-headers=""
-body=""
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    -D) headers="$2"; shift 2 ;;
-    -o) body="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat >"$headers" <<'HEADERS'
-HTTP/2 200
-anthropic-ratelimit-unified-5h-reset: 1781506200
-anthropic-ratelimit-unified-5h-utilization: 0.06
-anthropic-ratelimit-unified-7d-reset: 1781942400
-anthropic-ratelimit-unified-7d-utilization: 0.12
-HEADERS
-printf '%s\n' '{"content":[{"type":"text","text":"1"}]}' >"$body"
-printf '200'
-SH
-chmod +x "$TMP/bin/curl"
-
-"$ROOT/bin/aic" refresh claude personal
-test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "94"
-
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "[5h"
-assert_contains "$output" "13:47]"
-assert_contains "$output" "Jun 20, 15:00]"
-assert_contains "$output" "12% → 13:47"
-assert_contains "$output" "12% → Jun 20, 15:00"
+assert_contains "$output" "13:49]"
+assert_contains "$output" "Jun 20, 14:59]"
+assert_contains "$output" "4% → 13:49"
+assert_contains "$output" "13% → Jun 20, 14:59"
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
@@ -548,11 +456,16 @@ test ! -f "$AIC_DATA_DIR/accounts/codex/company.json"
 test -f "$AIC_DATA_DIR/accounts/codex/company-renamed.json"
 test "$(jq -r '.tokens.account_id' "$AIC_DATA_DIR/accounts/codex/company-renamed.json")" = "account-company"
 
-printf 'claude-rename-test\n' | add_claude_token rename-src >/dev/null
+jq -n '{
+  claudeAiOauth:{accessToken:"claude-rename-test",refreshToken:"claude-rename-refresh",expiresAt:4102444800000,scopes:["user:inference","user:profile"]},
+  organizationUuid:"org-rename",
+  created_at:"2026-01-01T00:00:00Z"
+}' >"$AIC_DATA_DIR/accounts/claude/rename-src.json"
+chmod 600 "$AIC_DATA_DIR/accounts/claude/rename-src.json"
 rename_claude_account rename-src rename-dst >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/rename-src.json"
 test -f "$AIC_DATA_DIR/accounts/claude/rename-dst.json"
-test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/rename-dst.json")" = "claude-rename-test"
+test "$(jq -r '.claudeAiOauth.accessToken' "$AIC_DATA_DIR/accounts/claude/rename-dst.json")" = "claude-rename-test"
 remove_claude rename-dst >/dev/null
 
 remove_codex_impl company-renamed >/dev/null
@@ -613,11 +526,13 @@ chmod 600 "$AIC_DATA_DIR/accounts/claude/expired-test.json"
 switch_claude_impl expired-test >/dev/null 2>&1 || true
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "expired-test"
 
-# Verify token-only accounts (from add_claude_token) cannot switch
-if ( switch_claude_impl personal ) >/dev/null 2>&1; then
-  printf 'ERROR: token-only account should have failed switch\n' >&2
+# Verify unsupported legacy token-only accounts cannot switch
+jq -n '{token:"sk-ant-oat01-legacy",created_at:"t"}' >"$AIC_DATA_DIR/accounts/claude/legacy-token.json"
+if ( switch_claude_impl legacy-token ) >/dev/null 2>&1; then
+  printf 'ERROR: legacy token-only account should have failed switch\n' >&2
   exit 1
 fi
+remove_claude legacy-token >/dev/null
 
 cat >"$TMP/bin/claude" <<'SH'
 #!/usr/bin/env bash
@@ -638,11 +553,12 @@ switch_claude_impl personal >/dev/null
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
 # Parallel-account session: "Run a profile session" candidate filter.
-printf 'sk-ant-oat01-parA\n' | add_claude_token par-a >/dev/null   # setup-token kind
+jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},organizationUuid:"o-a",created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/par-a.json"
 jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},created_at:"t"}' \
-  >"$AIC_DATA_DIR/accounts/claude/par-b.json"                       # oauth kind
+  >"$AIC_DATA_DIR/accounts/claude/par-b.json"
 clear_active_claude_name
-test "$(claude_account_kind par-a)" = "token"
+test "$(claude_account_kind par-a)" = "oauth"
 test "$(claude_account_kind par-b)" = "oauth"
 # both are candidates when not the global-active account
 test "$(claude_parallel_candidates | grep -c '^par-a$')" = "1"
@@ -664,7 +580,7 @@ test "$(claude_parallel_candidates | grep -c '^par-a$')" = "0"
 clear_active_claude_name
 
 # launch_claude_parallel must seed Claude Code's credential profile, not pass
-# setup-token material through env. ANTHROPIC_AUTH_TOKEN reports as API Usage
+# credential material through env. ANTHROPIC_AUTH_TOKEN reports as API Usage
 # Billing, and CLAUDE_CODE_OAUTH_TOKEN can be shadowed by macOS keychain state.
 # The isolated, seeded config dir is the auth boundary for this terminal.
 cat >"$TMP/bin/claude" <<'SH'
@@ -710,10 +626,9 @@ assert_contains "$output" "CLOUD_ML_REGION="
 assert_contains "$output" "ARGS=--print"
 test "$(jq -r '.hasCompletedOnboarding' "$AIC_DATA_DIR/sessions/claude-par-a/.claude.json")" = "true"
 test "$(jq -r 'has("oauthAccount")' "$AIC_DATA_DIR/sessions/claude-par-a/.claude.json")" = "false"
-test "$(jq -r '.claudeAiOauth.accessToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "sk-ant-oat01-parA"
-test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = ""
+test "$(jq -r '.claudeAiOauth.accessToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "a"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "r"
 test "$(jq -r '.claudeAiOauth.expiresAt' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "0"
-test "$(jq -r '.claudeAiOauth.scopes[0]' "$AIC_DATA_DIR/sessions/claude-par-a/.credentials.json")" = "user:inference"
 remove_claude par-a >/dev/null; remove_claude par-b >/dev/null
 rm -f "$(claude_session_pid_file par-a)"
 
@@ -736,16 +651,6 @@ reclaim_claude_session rec-sync warn >/dev/null
 test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/rec-sync.json")" = "new-rt"
 test ! -d "$rec_dir"
 remove_claude rec-sync >/dev/null
-
-# Setup-token session reclaim keeps the stored token field authoritative.
-printf 'sk-ant-oat01-rec-old\n' | add_claude_token rec-token >/dev/null
-rec_dir="$(claude_session_config_dir rec-token)"
-mkdir -p "$rec_dir"
-jq -n '{claudeAiOauth:{accessToken:"sk-ant-oat01-rec-new",refreshToken:"",expiresAt:0,scopes:["user:inference"]}}' >"$rec_dir/.credentials.json"
-reclaim_claude_session rec-token warn >/dev/null
-test "$(jq -r '.token' "$AIC_DATA_DIR/accounts/claude/rec-token.json")" = "sk-ant-oat01-rec-new"
-test ! -d "$rec_dir"
-remove_claude rec-token >/dev/null
 
 # Clean up
 remove_claude switch-test >/dev/null

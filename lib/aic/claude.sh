@@ -3,37 +3,6 @@
 # Claude accounts: keychain, OAuth import, subscription login, switch
 # Sourced by lib/aic/_load.sh; not executed directly.
 
-claude_token_box_plain() {
-  local text="$1" style="${2:-}" pad
-  pad=$((60 - ${#text}))
-  (( pad < 0 )) && pad=0
-  printf '%s|%s%s%s%*s%s|%s\n' \
-    "$CYAN" "$RESET" "$style" "$text" "$pad" "" "$CYAN" "$RESET" >&2
-}
-
-claude_token_box_highlight() {
-  local left="$1" highlight="$2" right="$3" pad
-  pad=$((60 - ${#left} - ${#highlight} - ${#right}))
-  (( pad < 0 )) && pad=0
-  printf '%s|%s%s%s%s%s%s%*s%s|%s\n' \
-    "$CYAN" "$RESET" "$left" "$YELLOW" "$highlight" "$RESET" "$right" \
-    "$pad" "" "$CYAN" "$RESET" >&2
-}
-
-print_claude_token_instructions() {
-  printf '%s+------------------------------------------------------------+%s\n' "$CYAN" "$RESET" >&2
-  claude_token_box_plain "  CLAUDE SETUP TOKEN" "$BOLD"
-  claude_token_box_plain ""
-  claude_token_box_highlight "  1  Run " "claude setup-token" " in another terminal."
-  claude_token_box_plain "  2  Approve the browser login."
-  claude_token_box_highlight "  3  Paste the " "sk-ant-oat01-..." " token here."
-  claude_token_box_plain ""
-  claude_token_box_plain "  Claude shows this token once. Input is visible so you" "$DIM"
-  claude_token_box_plain "  can confirm it pasted cleanly (no stray characters)." "$DIM"
-  printf '%s+------------------------------------------------------------+%s\n' "$CYAN" "$RESET" >&2
-  printf '\n' >&2
-}
-
 # Single source of truth for the "capture credential on the other Mac" command,
 # used by both the on-screen instructions and the [c] copy-to-clipboard hotkey.
 # `tee /dev/tty` echoes the credential to the screen (and the trailing `echo`
@@ -88,22 +57,14 @@ print_claude_credential_import_box() {
   printf '%s%s%s\n' "$C" "$rule" "$R" >&2
 }
 
-# Strip whitespace and control bytes (e.g. a stray ESC captured during a paste)
-# from a Claude token. A setup token / OAuth access token is a single run of
-# printable, whitespace-free characters, so this only ever removes corruption.
-# One such byte silently breaks the Authorization header and makes every usage
-# refresh fail with a blank error, so sanitize on both input and read.
+# Strip whitespace and control bytes from a Claude OAuth access token.
 sanitize_claude_token() {
   printf '%s' "$1" | tr -d '[:space:][:cntrl:]'
 }
 
-# Two kinds of Claude account share CLAUDE_ACCOUNTS_DIR:
-#   "oauth" — a full browser login with a refreshToken. Only these can be
-#             switched globally (written to the keychain so every client picks
-#             them up), because the keychain rejects refresh-token-less creds.
-#   "token" — a setup-token (`claude setup-token`). It is subscription/OAuth
-#             credential material, but lacks a refresh token, so it runs only in
-#             a per-launch credential profile and never switches globally.
+# Supported Claude accounts are full OAuth browser logins with a refresh token.
+# Older refresh-token-less records are classified as unsupported and are kept
+# only so users can remove or replace them.
 claude_account_kind() {
   local file
   file="$(claude_account_file "$1")"
@@ -111,7 +72,7 @@ claude_account_kind() {
   if [[ -n "$(jq -r '.claudeAiOauth.refreshToken // empty' "$file" 2>/dev/null)" ]]; then
     printf 'oauth'
   else
-    printf 'token'
+    printf 'unsupported'
   fi
 }
 
@@ -120,14 +81,6 @@ claude_oauth_names() {
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     [[ "$(claude_account_kind "$n")" == "oauth" ]] && printf '%s\n' "$n"
-  done < <(claude_names)
-}
-
-claude_token_names() {
-  local n
-  while IFS= read -r n; do
-    [[ -n "$n" ]] || continue
-    [[ "$(claude_account_kind "$n")" == "token" ]] && printf '%s\n' "$n"
   done < <(claude_names)
 }
 
@@ -146,9 +99,6 @@ claude_token_usage_badge() {
   printf '[5h %s  7d %s]' "$five" "$week"
 }
 
-# Launch a full Claude session authenticated by a setup-token. Session-scoped:
-# only this process uses the account; the global keychain / other clients are
-# untouched.
 # ---- Parallel account sessions ---------------------------------------------
 # Run another Claude account in THIS terminal (its own quota), alongside your
 # global account — e.g. to burn down two accounts at once near a weekly reset.
@@ -186,14 +136,14 @@ claude_account_in_session() {
   return 1
 }
 
-# Accounts eligible to run in parallel: everything except the global-active
-# account (running it in parallel would just split its one quota). An account
-# already running is still listed — the launcher marks it "running" — so it never
-# disappears.
+# OAuth accounts eligible to run in parallel: everything except the
+# global-active account (running it in parallel would just split its one quota).
+# An account already running is still listed — the launcher marks it "running".
 claude_parallel_candidates() {
   local active name; active="$(active_claude_name)"
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    [[ "$(claude_account_kind "$name")" == "oauth" ]] || continue
     [[ "$name" == "$active" ]] && continue
     printf '%s\n' "$name"
   done < <(claude_names)
@@ -288,15 +238,9 @@ read_claude_session_credentials() {
 }
 
 _claude_account_session_credentials() {
-  local name="$1" file token oauth org
+  local name="$1" file oauth org
   file="$(claude_account_file "$name")"
   case "$(claude_account_kind "$name")" in
-    token)
-      token="$(sanitize_claude_token "$(jq -r '.token // .claudeAiOauth.accessToken // empty' "$file")")"
-      [[ -n "$token" ]] || die "Account '$name' has no usable setup-token."
-      jq -n --arg token "$token" \
-        '{claudeAiOauth:{accessToken:$token,refreshToken:"",expiresAt:0,scopes:["user:inference"]}}'
-      ;;
     oauth)
       oauth="$(jq -c '.claudeAiOauth // empty' "$file")"
       [[ -n "$oauth" ]] || die "Account '$name' has no OAuth credentials."
@@ -305,7 +249,7 @@ _claude_account_session_credentials() {
         '{claudeAiOauth:$oauth} + (if $org != "" then {organizationUuid:$org} else {} end)'
       ;;
     *)
-      die "Unknown Claude account: $name"
+      die "Claude account '$name' is not a full OAuth login. Re-add it with: Add account → Claude → Login with OAuth."
       ;;
   esac
 }
@@ -398,23 +342,6 @@ validate_claude_session_profile() {
   fi
 }
 
-launch_claude_with_token() {
-  local name="$1"; shift
-  validate_name "$name"
-  local file dir
-  file="$(claude_account_file "$name")"
-  [[ -f "$file" ]] || die "Unknown Claude account: $name"
-  require_command claude
-  dir="$(claude_session_config_dir "$name")"
-  _seed_claude_session_config "$dir" "$name"
-  _seed_claude_session_dir "$name" "$dir"
-  validate_claude_session_profile "$name" "$dir"
-  register_claude_session "$name"
-  printf '%sLaunching Claude  ·  parallel (setup-token): %s  ·  this terminal, subscription quota%s\n' \
-    "$CYAN" "$name" "$RESET"
-  _exec_claude_isolated "$dir" claude "$@"
-}
-
 launch_claude_oauth_session() {
   local name="$1"; shift
   validate_name "$name"
@@ -434,9 +361,8 @@ launch_claude_oauth_session() {
 launch_claude_parallel() {
   local name="$1"; shift
   case "$(claude_account_kind "$name")" in
-    token) launch_claude_with_token "$name" "$@" ;;
     oauth) launch_claude_oauth_session "$name" "$@" ;;
-    *) die "Unknown Claude account: $name" ;;
+    *) die "Claude account '$name' is not a full OAuth login. Re-add it with: Add account → Claude → Login with OAuth." ;;
   esac
 }
 
@@ -449,8 +375,6 @@ launch_claude_parallel() {
 # If an account is running in a parallel session, offer to terminate it (so
 # global-switching to it takes over cleanly). OAuth session dirs may contain a
 # rotated credential chain, so sync that back before dropping the isolated copy.
-# Setup-token sessions also have .credentials.json, but no refresh token; syncing
-# them back is mostly a shape repair and keeps the stored `.token` authoritative.
 reclaim_claude_session() {
   local name="$1" mode="${2:-warn}"
   local pidf pid sessdir sesscreds
@@ -484,10 +408,7 @@ reclaim_claude_session() {
     oauth="$(read_claude_session_credentials "$sessdir" 2>/dev/null | jq -c '.claudeAiOauth // empty' 2>/dev/null || true)"
     dest="$(claude_account_file "$name")"
     if [[ -n "$oauth" && -f "$dest" ]]; then
-      if [[ -z "$(jq -r '.refreshToken // empty' <<<"$oauth" 2>/dev/null)" ]]; then
-        jq --argjson o "$oauth" '.token = ($o.accessToken // .token) | .claudeAiOauth = $o' "$dest" >"$dest.tmp" 2>/dev/null &&
-          chmod 600 "$dest.tmp" && mv -f "$dest.tmp" "$dest"
-      else
+      if [[ -n "$(jq -r '.refreshToken // empty' <<<"$oauth" 2>/dev/null)" ]]; then
         jq --argjson o "$oauth" '.claudeAiOauth = $o' "$dest" >"$dest.tmp" 2>/dev/null &&
           chmod 600 "$dest.tmp" && mv -f "$dest.tmp" "$dest"
       fi
@@ -495,50 +416,6 @@ reclaim_claude_session() {
     rm -rf "$sessdir" 2>/dev/null || true
   fi
   return 0
-}
-
-add_claude_token() {
-  local name="$1"
-  local token="${2:-}"
-  validate_name "$name"
-
-  # Never silently clobber an existing account. Overwriting an OAuth login with
-  # a bare setup-token would strip its refresh token and downgrade it from a
-  # global-switchable account to a session-only credential — refuse outright.
-  if [[ -f "$(claude_account_file "$name")" ]]; then
-    if [[ "$(claude_account_kind "$name")" == "oauth" ]]; then
-      die "Account '$name' is a full OAuth login (globally switchable). Adding a setup-token would remove that. Choose another name, or remove '$name' first."
-    fi
-    warn "Setup-token account '$name' already exists; it will be replaced."
-    if [[ -t 0 ]]; then
-      local ans
-      ans="$(choose_from "Overwrite existing setup-token '$name'?" "No, cancel" "Yes, overwrite")" || return 1
-      [[ "$ans" == Yes* ]] || return 1
-    fi
-  fi
-
-  if [[ -z "$token" ]]; then
-    if [[ ! -t 0 ]]; then
-      IFS= read -r token
-    else
-      print_claude_token_instructions
-      printf '%sPaste setup token:%s ' "$BOLD" "$RESET" >&2
-      # Visible input (not -s): the paste is echoed so you can eyeball it before
-      # it is stored. sanitize_claude_token still strips anything unexpected.
-      IFS= read -r token
-    fi
-  fi
-  token="$(sanitize_claude_token "$token")"
-  [[ -n "$token" ]] || die "Claude token cannot be empty."
-
-  local destination
-  destination="$(claude_account_file "$name")"
-  jq -n --arg token "$token" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{token:$token, created_at:$created}' >"$destination.tmp" ||
-    die "Could not store Claude token."
-  chmod 600 "$destination.tmp"
-  mv -f "$destination.tmp" "$destination"
-  printf 'Saved Claude account: %s\n' "$name"
 }
 
 current_claude_oauth_blob() {
@@ -617,8 +494,6 @@ save_current_claude_oauth() {
 
 # Import a full Claude OAuth login from a base64 blob captured on another machine:
 #   security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n'
-# Unlike a setup-token this carries the refresh token, so the imported account is
-# globally switchable. (A bare setup-token belongs under Open with model.)
 import_claude_oauth_blob() {
   local name="$1"
   local input="${2:-}"
@@ -673,7 +548,7 @@ import_claude_oauth_blob() {
   fi
 
   store_claude_oauth_blob "$name" "$blob" ||
-    die "Not a full Claude OAuth credential (no refresh token). For an inference-only setup-token use: Open with model → Claude → Add Claude setup-token."
+    die "Not a full Claude OAuth credential (no refresh token). Use Add account → Claude → Login with OAuth."
 
   printf 'Imported Claude OAuth account: %s  (globally switchable)\n' "$name"
 }
@@ -849,10 +724,8 @@ switch_claude_impl() {
 }
 
 interactive_claude_use() {
-  # Global switch targets are OAuth logins only — they alone carry the refresh
-  # token the keychain requires. Setup-token accounts are launched per-session
-  # from Open with model → Claude, so they are excluded here (ranked by score,
-  # so the first OAuth entry is the best switchable account).
+  # Global switch targets are OAuth logins only; they carry the refresh token
+  # the keychain requires.
   local options=() best_name="" name score rest item label
   while IFS=$'\t' read -r name score rest; do
     [[ -n "$name" ]] || continue
@@ -867,9 +740,6 @@ interactive_claude_use() {
 
   if [[ "${#options[@]}" -eq 0 ]]; then
     warn "No switchable Claude accounts yet. Add one from: Add account → Claude → Login with OAuth."
-    local toks
-    toks="$(claude_token_names | paste -sd', ' -)"
-    [[ -n "$toks" ]] && printf '  Setup-token accounts (%s) run per-session via Open with model → Claude.\n' "$toks" >&2
     return 1
   fi
 

@@ -109,10 +109,8 @@ manage_account_menu() {
     )
   else
     sub_options=(
-      "▶  Run a profile session (this terminal)::launch-token"
       "↻  Refresh this account::refresh"
       "✎  Rename::rename"
-      "◈  Update setup-token::update-token"
       "×  Remove::remove"
     )
   fi
@@ -155,12 +153,6 @@ manage_account_menu() {
       ;;
     reimport)
       with_lock reimport_codex_auth_json "$name"
-      ;;
-    update-token)
-      add_claude_token "$name"
-      ;;
-    launch-token)
-      launch_claude_parallel "$name"
       ;;
     remove)
       local answer
@@ -514,14 +506,10 @@ account afterward, just run `codex` in your terminal.
 
 Do not switch accounts while another Codex CLI process is still running.
 
-ACCOUNTS vs SETUP-TOKENS  (Claude)
+CLAUDE ACCOUNTS
   Account (OAuth login)  - has a refresh token; switches GLOBALLY (written to
                            the keychain, so every terminal + VS Code + extension
                            uses it). Add under "Add account -> Claude".
-  Setup-token            - a session-only Claude subscription credential. Full
-                           Claude (Opus/Sonnet, subagents, all tools) but only
-                           for the session you launch with it; other clients are
-                           untouched. Add/run under "Run a profile session".
 
 ADD A CLAUDE ACCOUNT (global switch)
 Choose "Add account -> Claude":
@@ -539,26 +527,22 @@ RUN A PROFILE SESSION  (this terminal only)
 it runs alongside your global account. For Claude it lists:
   Parallel account  - run another Claude account here, on ITS OWN quota (great
                       for burning two accounts at once near a weekly reset).
-                      Setup-tokens launch from an isolated, pre-seeded
+                      Accounts launch from an isolated, pre-seeded
                       CLAUDE_CONFIG_DIR containing .credentials.json, so they
                       use subscription OAuth quota, avoid keychain hijack, and
-                      skip the first-run wizard. ANTHROPIC_AUTH_TOKEN is not
-                      used here; if Claude /status shows API Usage Billing,
-                      close that session because it is the wrong auth path.
+                      skip the first-run wizard.
                       The global-active account is hidden; an account already
                       running is shown but flagged "running" (never hidden).
   Model / provider  - alternate model or API provider (DeepSeek / custom).
-Add a setup-token with "+ Add Claude setup-token" (`claude setup-token`, shown
-once as `sk-ant-oat01-...`). Reclaiming: switching globally to an account that is
-running in a parallel session offers to terminate that session; its latest token
-is synced back automatically, so you never re-import. Closing the terminal also
-frees the session.
+Reclaiming: switching globally to an account that is running in a parallel
+session offers to terminate that session; its latest token is synced back
+automatically, so you never re-import. Closing the terminal also frees the
+session.
 
 MONITORING
-"Refresh all usage" updates every stored account, including setup-tokens.
+"Refresh all usage" updates every stored account.
 Codex usage is read from account/rateLimits/read without an inference prompt.
-Claude full OAuth uses its usage endpoint. An inference-only setup-token uses a
-one-output-token Haiku request and reads utilization from response headers.
+Claude full OAuth uses its usage endpoint.
 
 BACKGROUND SCHEDULE
 Open "Settings" and set a schedule interval (15m, 30m, 1h, 2h, 4h, 6h) or turn
@@ -633,14 +617,10 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 
 อย่าสลับบัญชีขณะที่ยังมี Codex CLI process อื่นกำลังทำงานอยู่
 
-บัญชี vs SETUP-TOKEN  (Claude)
+บัญชี CLAUDE
   บัญชี (OAuth login) - มี refresh token สลับได้ระดับ GLOBAL (เขียนลง keychain
                         ทุก terminal + VS Code + extension จะใช้บัญชีนี้)
                         เพิ่มที่ "Add account -> Claude"
-  Setup-token         - เป็น session credential ของ Claude subscription ใช้ Claude ได้เต็ม
-                        (Opus/Sonnet, subagent, ทุก tool) แต่เฉพาะ session ที่เปิด
-                        เท่านั้น client อื่นไม่กระทบ เพิ่ม/เปิดที่
-                        "Run a profile session"
 
 เพิ่มบัญชี CLAUDE (สลับระดับ global)
 เลือก "Add account -> Claude":
@@ -657,23 +637,19 @@ RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
 "Run a profile session -> Codex / Claude" เปิด CLI สำหรับ terminal เดียว รันคู่ขนานกับ
 บัญชี global ได้ ฝั่ง Claude จะลิสต์:
   Parallel account - รันอีกบัญชีที่นี่ ใช้ quota ของบัญชีนั้นเอง (เหมาะตอนใกล้ reset
-                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) setup-token เปิดจาก
+                     รายสัปดาห์ อยากเบิร์นสองบัญชีพร้อมกัน) บัญชีเปิดจาก
                      CLAUDE_CONFIG_DIR แยกที่ seed .credentials.json ไว้แล้ว จึงใช้ quota
                      subscription OAuth, ไม่โดน keychain hijack, และไม่ขึ้น wizard ตั้งค่า
-                     path นี้ไม่ใช้ ANTHROPIC_AUTH_TOKEN; ถ้า Claude /status แสดง
-                     API Usage Billing ให้ปิด session นั้น เพราะเปิดผิด auth path
                      บัญชี global-active จะถูกซ่อน ส่วนบัญชีที่รันอยู่แล้วจะแสดงพร้อมป้าย
                      "running" (ไม่ซ่อน จะได้ไม่หายไป)
   Model / provider - โมเดล/provider อื่น (DeepSeek/custom)
-เพิ่ม setup-token ด้วย "+ Add Claude setup-token" (`claude setup-token`)
 การเรียกคืน: ถ้าสลับ global ไปบัญชีที่กำลังรัน parallel อยู่ aic จะถามเพื่อปิด session นั้น
 แล้ว sync token ล่าสุดกลับให้อัตโนมัติ จึงไม่ต้อง import ใหม่ (ปิด terminal ก็ปลดได้เช่นกัน)
 
 การ MONITOR
-"Refresh all usage" อัปเดตข้อมูลทุกบัญชี รวมถึง setup-token
+"Refresh all usage" อัปเดตข้อมูลทุกบัญชี
 Codex อ่าน account/rateLimits/read โดยไม่ยิง inference prompt
-Claude full OAuth ใช้ usage endpoint ส่วน setup-token จะยิง Haiku ที่ output
-หนึ่ง token แล้วอ่าน utilization จาก response headers
+Claude full OAuth ใช้ usage endpoint
 
 ตั้งเวลา BACKGROUND
 เปิด "Settings" แล้วตั้งช่วงเวลา (15m, 30m, 1h, 2h, 4h, 6h) หรือปิด
@@ -941,7 +917,6 @@ interactive_menu() {
           esac
         else
           # Accounts here are OAuth logins only — they switch globally (keychain).
-          # Setup-tokens are session credentials: add them under Open with model.
           sub="$(choose_from "Add Claude account (global switch)" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \

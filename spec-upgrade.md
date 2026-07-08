@@ -8,6 +8,21 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-08 — v0.16.5: Remove Claude setup-token support
+
+Setup-token-only credentials are not useful enough for Account Center's
+multi-client workflow: they cannot switch globally and do not work as a portable
+credential for Claude CLI, Codex, or OpenCode. Claude support now accepts only
+full OAuth logins with a refresh token.
+
+- Removed the `+ Add Claude setup-token` menu path and `add_claude_token`.
+- Legacy token-only Claude records are classified as `unsupported`; they can be
+  removed but are not offered for switch or profile launch.
+- Claude usage refresh now uses only the OAuth usage endpoint; the Haiku
+  inference-header fallback was removed.
+- Parallel Claude sessions remain available for full OAuth accounts through an
+  isolated `CLAUDE_CONFIG_DIR`.
+
 ### 2026-07-08 — v0.16.4: Setup-token profile sessions use `.credentials.json`, not auth-token env
 
 The `CLAUDE_CODE_OAUTH_TOKEN` rollback in v0.16.3 avoided API billing, but still

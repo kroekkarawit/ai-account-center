@@ -141,12 +141,15 @@ refresh_claude_account() {
   [[ "$enabled" == "true" ]] || return 0
   require_command curl
 
-  token="$(jq -r '.claudeAiOauth.accessToken // .token // empty' "$source")"
-  # Heal already-stored tokens that captured stray control bytes on paste before
-  # input was sanitized, so an old corrupted account recovers on the next refresh.
+  if [[ "$(claude_account_kind "$name")" != "oauth" ]]; then
+    write_error_usage claude "$name" "Claude account is not a full OAuth login. Re-add it from Add account -> Claude -> Login with OAuth."
+    return 1
+  fi
+
+  token="$(jq -r '.claudeAiOauth.accessToken // empty' "$source")"
   token="$(sanitize_claude_token "$token")"
   [[ -n "$token" ]] || {
-    write_error_usage claude "$name" "Stored Claude token is empty."
+    write_error_usage claude "$name" "Stored Claude OAuth token is empty."
     return 1
   }
   timeout_seconds="$(jq -r '.monitor.claude.timeout_seconds // 15' "$CONFIG_FILE")"
@@ -166,79 +169,8 @@ refresh_claude_account() {
   if ! jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
     local message
     message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
-    if [[ "$message" == *"scope requirement user:profile"* ]]; then
-      local headers body model payload http_code
-      headers="$RUNTIME_DIR/claude-$name-headers.txt"
-      body="$RUNTIME_DIR/claude-$name-body.json"
-      model="$(jq -r '.monitor.claude.probe_model // "claude-haiku-4-5-20251001"' "$CONFIG_FILE")"
-      payload="$(
-        jq -nc --arg model "$model" '{
-          model:$model,
-          max_tokens:1,
-          messages:[{role:"user",content:"hi"}]
-        }'
-      )"
-
-      http_code="$(
-        curl -sS --max-time "$timeout_seconds" \
-          -D "$headers" \
-          -o "$body" \
-          -w '%{http_code}' \
-          -H "Accept: application/json" \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Bearer $token" \
-          -H "anthropic-version: 2023-06-01" \
-          -H "anthropic-beta: oauth-2025-04-20" \
-          -H "User-Agent: ai-account-center/$APP_VERSION" \
-          -X POST \
-          -d "$payload" \
-          "https://api.anthropic.com/v1/messages" 2>/dev/null
-      )"
-
-      local five_util week_util five_reset week_reset
-      five_util="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-5h-utilization" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
-      week_util="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-7d-utilization" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
-      five_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-5h-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
-      week_reset="$(awk -F': *' 'tolower($1)=="anthropic-ratelimit-unified-7d-reset" {gsub(/\r/,"",$2); print $2}' "$headers" | tail -1)"
-
-      # Anthropic returns the unified rate-limit headers on BOTH 2xx and 429
-      # responses. When a window is exhausted the probe is rejected with 429,
-      # but the headers still report utilization (~1.0) and the reset time — so
-      # trust them regardless of status instead of showing a hard "ERR". An
-      # account at 100% then displays as full + reset time, not an error.
-      if [[ -n "$five_util" && -n "$week_util" ]]; then
-        usage="$(
-          jq -n \
-            --arg five "$five_util" \
-            --arg week "$week_util" \
-            --argjson five_reset "${five_reset:-null}" \
-            --argjson week_reset "${week_reset:-null}" \
-            '{
-              five_hour:{
-                utilization:([(($five | tonumber) * 100), 100] | min),
-                resets_at_epoch:$five_reset
-              },
-              seven_day:{
-                utilization:([(($week | tonumber) * 100), 100] | min),
-                resets_at_epoch:$week_reset
-              }
-            }'
-        )"
-        source_type="inference_headers"
-      else
-        message="$(jq -r '.error.message // .message // empty' "$body" 2>/dev/null)"
-        if [[ "$http_code" == "429" || "$message" == *"rate limit"* || "$message" == *"exceed"* ]]; then
-          message="Rate limit reached (account at 100%); no utilization headers returned. Try again after the window resets."
-        fi
-        [[ -n "$message" ]] ||
-          message="Claude probe failed (HTTP ${http_code:-unknown}); rate-limit headers were missing."
-        write_error_usage claude "$name" "$message"
-        return 1
-      fi
-    else
-      write_error_usage claude "$name" "$message"
-      return 1
-    fi
+    write_error_usage claude "$name" "$message"
+    return 1
   fi
 
   local destination
@@ -750,4 +682,3 @@ next_refresh_countdown() {
     printf 'in %dm' "$((remaining / 60))"
   fi
 }
-

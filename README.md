@@ -13,7 +13,7 @@ remember: run `aic` and pick what you want to do.
 - `jq`
 - Codex CLI
 - `curl`
-- Claude CLI (only for Claude subscription login / setup-token)
+- Claude CLI (only for Claude subscription login)
 - A terminal with ANSI color and arrow-key support
 
 ## Install
@@ -111,20 +111,12 @@ the menu warns you and offers to close running sessions.
   `Ctrl-D`, or `q`. For very large auth files, importing by path is most
   reliable.
 
-### Accounts vs setup-tokens (Claude)
+### Claude accounts
 
-Claude has two credential types, and they behave differently:
-
-- **Account (OAuth login)** — has a refresh token, so it switches **globally**:
-  the switch writes it to the keychain and every client (terminal, VS Code,
-  extensions) picks it up, just like Codex. Add these under **Add account →
-  Claude**.
-- **Setup-token** — a session-only Claude subscription credential. It gives full Claude
-  (Opus/Sonnet, subagents, all tools) but only for the session you launch with
-  it; other clients are untouched. Account Center stores it as Claude
-  OAuth-shaped credential material in an isolated profile; it is not launched
-  with `ANTHROPIC_AUTH_TOKEN`. The keychain rejects a setup-token, so it
-  **cannot** switch globally. Add/run these under **Open with model → Claude**.
+Claude support is limited to full OAuth logins with a refresh token. These
+switch **globally**: the switch writes the account to the keychain and every
+client (terminal, VS Code, extensions) picks it up, just like Codex. Add these
+under **Add account → Claude**.
 
 ### Add a Claude account
 
@@ -144,13 +136,11 @@ Claude has two credential types, and they behave differently:
 
   then paste the copied string here. At the prompt, press **`c`** to copy that
   command to your clipboard (to run on the other machine or send in chat). It
-  carries the refresh token, so the account is globally switchable — different
-  from a setup-token. (This is a plaintext credential; for an encrypted transfer
-  use Export / Import accounts.)
+  carries the refresh token, so the account is globally switchable. (This is a
+  plaintext credential; for an encrypted transfer use Export / Import
+  accounts.)
 
 All three capture the refresh token, so the account switches across all clients.
-Adding a setup-token here is intentionally not offered — it would be a
-session-only credential, not a switchable account.
 
 ### Run a profile session (this terminal only)
 
@@ -160,15 +150,13 @@ lists:
 
 - **Parallel account** — run **another** Claude account right here, on **its own
   quota**. Great for burning down two accounts at once when a weekly reset is a
-  day or two away. Setup-tokens launch from an isolated, pre-seeded
+  day or two away. Accounts launch from an isolated, pre-seeded
   `CLAUDE_CONFIG_DIR` containing `.credentials.json`, so Claude Code treats the
-  session as subscription OAuth usage, not API/custom-header billing. The
-  isolation prevents the ambient keychain login from hijacking inference, and
-  the pre-seeded config avoids the first-run wizard. aic also scrubs
-  custom-provider env such as `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and
-  Bedrock/Vertex flags, so a stale DeepSeek/OpenRouter export cannot steal the
-  session. If Claude `/status` shows **API Usage Billing**, close that session:
-  it is not running through the intended profile credential path. The
+  session as subscription OAuth usage. The isolation prevents the ambient
+  keychain login from hijacking inference, and the pre-seeded config avoids the
+  first-run wizard. aic also scrubs custom-provider env such as
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and Bedrock/Vertex flags, so a
+  stale DeepSeek/OpenRouter export cannot steal the session. The
   **global-active** account is hidden; an account **already
   running** in a session is shown but flagged **`⏵ running`** (so it never
   mysteriously disappears from the list). Usage is shown per account.
@@ -176,14 +164,10 @@ lists:
   applied via environment variables. **+ Add model / API provider** / **Manage
   profiles**.
 
-Add a setup-token with **+ Add Claude setup-token** (`claude setup-token`, shown
-once as `sk-ant-oat01-...`).
-
 **Reclaiming a parallel account:** an account running in a parallel session is
 flagged **`⏵ running`** in the list. If you **global-switch** to it, aic offers
-to **terminate that running session** first (these sessions use a static token
-and don't rotate, so nothing needs syncing back). Closing the
-terminal also frees the session.
+to **terminate that running session** first and sync its latest OAuth credential
+back. Closing the terminal also frees the session.
 
 ### Manage accounts
 
@@ -220,9 +204,7 @@ background refresh schedule.
 
 - **Codex** — calls the CLI app-server's `account/rateLimits/read` method. No
   inference prompt is sent and no model tokens are consumed.
-- **Claude (full OAuth)** — calls the usage endpoint used by Claude Code.
-- **Claude (inference-only setup-token)** — sends a one-output-token Haiku
-  request and reads 5-hour / 7-day utilization from the response headers.
+- **Claude** — calls the usage endpoint used by Claude Code OAuth logins.
 
 These provider details are implementation-dependent and may need updates when
 either CLI changes.
