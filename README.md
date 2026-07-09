@@ -124,23 +124,11 @@ under **Add account → Claude**.
 
 - **Login with OAuth** — full Claude subscription OAuth, imported automatically.
 - **Import current login** — imports the Claude Code login on this machine.
-- **Import credential (base64 from another machine)** — paste a credential
-  captured on another Mac. On that machine run:
 
-  ```sh
-  security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
-  ```
-
-  (`tee /dev/tty` prints the credential so the runner can see it worked; it's
-  also on the clipboard.)
-
-  then paste the copied string here. At the prompt, press **`c`** to copy that
-  command to your clipboard (to run on the other machine or send in chat). It
-  carries the refresh token, so the account is globally switchable. (This is a
-  plaintext credential; for an encrypted transfer use Export / Import
-  accounts.)
-
-All three capture the refresh token, so the account switches across all clients.
+Both capture a refresh token for this machine, so the account switches across
+local clients. Do not clone Claude keychain credentials across machines: Claude
+refresh tokens rotate, and the first machine to refresh invalidates stale
+copies. For multi-machine use, run **Login with OAuth** on each machine.
 
 ### Run a profile session (this terminal only)
 

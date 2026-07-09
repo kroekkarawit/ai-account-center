@@ -421,20 +421,6 @@ test "$(claude_oauth_names | grep -c '^personal$')" = "1"
 test "$(claude_oauth_names | grep -c '^legacy-token$')" = "0"
 rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude/legacy-token.json"
 
-# Import a full OAuth login from a base64 keychain blob (another machine).
-blob_json='{"claudeAiOauth":{"accessToken":"sk-ant-oat01-imp","refreshToken":"sk-ant-ort01-imp","expiresAt":1783342808084,"scopes":["user:inference","user:profile"],"subscriptionType":"pro"},"mcpOAuth":{}}'
-blob_b64="$(printf '%s' "$blob_json" | base64 | tr -d '\n')"
-printf '%s\n' "$blob_b64" | import_claude_oauth_blob imported >/dev/null
-test "$(claude_account_kind imported)" = "oauth"
-test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/imported.json")" = "sk-ant-ort01-imp"
-# A blob without a refresh token must be rejected.
-notoken_b64="$(printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}' | base64 | tr -d '\n')"
-if printf '%s\n' "$notoken_b64" | import_claude_oauth_blob rejectme >/dev/null 2>&1; then
-  echo "FAIL: imported a credential with no refresh token"; exit 1
-fi
-test ! -f "$AIC_DATA_DIR/accounts/claude/rejectme.json"
-rm -f "$AIC_DATA_DIR/accounts/claude/imported.json"
-
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "[5h"
 assert_contains "$output" "13:49]"

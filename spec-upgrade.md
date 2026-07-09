@@ -8,6 +8,20 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-09 — Unreleased: Remove Claude base64 credential import
+
+The `Import credential (base64 from another machine)` path cloned Claude's
+keychain OAuth credential, including the refresh token. Anthropic refresh tokens
+rotate on use, so the first machine to refresh invalidates the other machine's
+stale copy. This is unsuitable for multi-machine use and creates confusing
+`Invalid authentication credentials` failures.
+
+- Removed the Add Claude account menu item for base64 credential import.
+- Removed `import_claude_oauth_blob`, the capture-command helper, and the
+  on-screen walkthrough for cross-machine keychain blobs.
+- Help and README now direct multi-machine users to run `Login with OAuth` on
+  each machine instead of cloning credentials.
+
 ### 2026-07-08 — v0.16.5: Remove Claude setup-token support
 
 Setup-token-only credentials are not useful enough for Account Center's

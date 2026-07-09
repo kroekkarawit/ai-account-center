@@ -3,60 +3,6 @@
 # Claude accounts: keychain, OAuth import, subscription login, switch
 # Sourced by lib/aic/_load.sh; not executed directly.
 
-# Single source of truth for the "capture credential on the other Mac" command,
-# used by both the on-screen instructions and the [c] copy-to-clipboard hotkey.
-# `tee /dev/tty` echoes the credential to the screen (and the trailing `echo`
-# adds a newline) so the person running it sees output and knows it worked,
-# rather than a silent clipboard copy that looks like nothing happened.
-claude_cred_capture_cmd() {
-  printf '%s' 'security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo'
-}
-
-# A framed, colored walkthrough for importing a Claude credential from another
-# machine: a source→destination diagram, numbered steps, and the command shown
-# on its own highlighted line so it is easy to select or copy with [c].
-print_claude_credential_import_box() {
-  local h v tl tr bl br conn rule box gap
-  if supports_utf8; then
-    h='─'; v='│'; tl='┌'; tr='┐'; bl='└'; br='┘'; conn=' ──> '
-  else
-    h='-'; v='|'; tl='+'; tr='+'; bl='+'; br='+'; conn=' --> '
-  fi
-  rule="$(printf "${h}%.0s" $(seq 1 64))"
-  box="$(printf "${h}%.0s" $(seq 1 12))"   # 12 inner cols → 14-wide box incl borders
-  gap='     '                              # 5 spaces == visual width of conn
-
-  local C="$CYAN" R="$RESET" B="$BOLD" D="$DIM" Y="$YELLOW" G="$GREEN" W="$WHITE"
-
-  # Build each row as one string so widths line up exactly across rows.
-  local cell_top="${C}${tl}${box}${tr}${R}"
-  local cell_bot="${C}${bl}${box}${br}${R}"
-  local arrow="${B}${Y}${conn}${R}"
-  local cellL="${C}${v}${R} OTHER Mac  ${C}${v}${R}"
-  local cellM="${C}${v}${R} clipboard  ${C}${v}${R}"
-  local cellR="${C}${v}${R}  THIS Mac  ${C}${v}${R}"
-
-  printf '\n%s%s%s\n' "$C" "$rule" "$R" >&2
-  printf '  %s%sIMPORT CLAUDE CREDENTIAL%s  %s· bring a switchable account onto this Mac%s\n' \
-    "$B" "$W" "$R" "$D" "$R" >&2
-  printf '%s%s%s\n\n' "$C" "$rule" "$R" >&2
-
-  printf '%s\n' "  ${cell_top}${gap}${cell_top}${gap}${cell_top}" >&2
-  printf '%s\n' "  ${cellL}${arrow}${cellM}${arrow}${cellR}" >&2
-  printf '%s\n' "  ${cell_bot}${gap}${cell_bot}${gap}${cell_bot}" >&2
-  printf '%s\n\n' "  ${D} run command  ${R}${gap}${D} or via chat  ${R}${gap}${D} paste result ${R}" >&2
-
-  printf '  %s1%s  Press %s[c]%s to copy the command  %s(or select the line below)%s\n' \
-    "$B" "$R" "$B$G" "$R" "$D" "$R" >&2
-  printf '  %s2%s  Run it on the OTHER Mac, or paste it to that person in chat.\n' "$B" "$R" >&2
-  printf '  %s3%s  It prints the credential (so they see it worked) and copies it.\n' "$B" "$R" >&2
-  printf '  %s4%s  Paste the copied credential back here.\n\n' "$B" "$R" >&2
-
-  printf '  %scommand to run on the other machine:%s\n' "$D" "$R" >&2
-  printf '    %s%s%s%s\n' "$B" "$Y" "$(claude_cred_capture_cmd)" "$R" >&2
-  printf '%s%s%s\n' "$C" "$rule" "$R" >&2
-}
-
 # Strip whitespace and control bytes from a Claude OAuth access token.
 sanitize_claude_token() {
   printf '%s' "$1" | tr -d '[:space:][:cntrl:]'
@@ -490,67 +436,6 @@ save_current_claude_oauth() {
   [[ -n "$blob" ]] || die "No Claude OAuth login found. Add it from the menu: Add Claude account → Login with OAuth."
   store_claude_oauth_blob "$name" "$blob" ||
     die "Claude login found but missing OAuth tokens. Re-add from the menu: Add Claude account → Login with OAuth."
-}
-
-# Import a full Claude OAuth login from a base64 blob captured on another machine:
-#   security find-generic-password -s "Claude Code-credentials" -w | base64 | tr -d '\n'
-import_claude_oauth_blob() {
-  local name="$1"
-  local input="${2:-}"
-  validate_name "$name"
-
-  if [[ -z "$input" ]]; then
-    if [[ ! -t 0 ]]; then
-      IFS= read -r input
-    else
-      print_claude_credential_import_box
-      while true; do
-        printf '\n%sPaste credential%s  %s(or press %sc%s%s then Enter to copy the command)%s: ' \
-          "$BOLD" "$RESET" "$DIM" "$BOLD$GREEN" "$RESET" "$DIM" "$RESET" >&2
-        IFS= read -r input
-        case "$input" in
-          c|C)
-            if printf '%s' "$(claude_cred_capture_cmd)" | transfer_clipboard_copy; then
-              printf '  %s✓ Command copied — run it on the other Mac, or paste it to that person in chat.%s\n' "$GREEN" "$RESET" >&2
-            else
-              printf '  %s! No clipboard tool found (pbcopy/xclip). Select the command above to copy it.%s\n' "$YELLOW" "$RESET" >&2
-            fi
-            ;;
-          *) break ;;
-        esac
-      done
-    fi
-  fi
-  input="$(printf '%s' "$input" | tr -d '[:space:]')"
-  [[ -n "$input" ]] || die "No credential provided."
-
-  # Accept raw JSON (starts with '{') or base64 of it.
-  local blob=""
-  if [[ "$input" == \{* ]]; then
-    blob="$input"
-  else
-    blob="$(printf '%s' "$input" | base64 -d 2>/dev/null)"
-    [[ -n "$blob" ]] || blob="$(printf '%s' "$input" | base64 -D 2>/dev/null)"
-  fi
-  jq -e . >/dev/null 2>&1 <<<"$blob" ||
-    die "Could not decode the credential (expected base64 of the keychain JSON)."
-
-  if [[ -f "$(claude_account_file "$name")" ]]; then
-    local existing_kind
-    existing_kind="$(claude_account_kind "$name")"
-    if [[ -t 0 ]]; then
-      local ans
-      ans="$(choose_from "Claude account '$name' exists ($existing_kind). Overwrite with imported OAuth login?" "No, cancel" "Yes, overwrite")" || return 1
-      [[ "$ans" == Yes* ]] || return 1
-    else
-      warn "Overwriting existing Claude account '$name' ($existing_kind) with imported OAuth login."
-    fi
-  fi
-
-  store_claude_oauth_blob "$name" "$blob" ||
-    die "Not a full Claude OAuth credential (no refresh token). Use Add account → Claude → Login with OAuth."
-
-  printf 'Imported Claude OAuth account: %s  (globally switchable)\n' "$name"
 }
 
 login_claude() {

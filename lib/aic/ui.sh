@@ -25,7 +25,6 @@ menu_icon() {
       model-launch) printf '◉' ;;
       claude-login) printf '◇' ;;
       claude-import) printf '⇠' ;;
-      claude-token) printf '◈' ;;
       manage) printf '✎' ;;
       transfer) printf '⇄' ;;
       export) printf '⇪' ;;
@@ -51,7 +50,6 @@ menu_icon() {
       model-launch) printf 'M>' ;;
       claude-login) printf 'A@' ;;
       claude-import) printf 'A<' ;;
-      claude-token) printf 'A#' ;;
       manage) printf 'M~' ;;
       transfer) printf 'IO' ;;
       export) printf 'E>' ;;
@@ -515,12 +513,10 @@ ADD A CLAUDE ACCOUNT (global switch)
 Choose "Add account -> Claude":
   Login with OAuth      - normal Claude subscription OAuth
   Import current login  - import this machine's Claude Code login
-  Import credential     - paste a base64 credential from another machine:
-                          security find-generic-password -s "Claude Code-credentials" \
-                            -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
-                          (tee /dev/tty prints it so you can see it worked)
-All three capture the refresh token, so the account switches across all clients.
-(The base64 form is plaintext; use Export / Import accounts for an encrypted move.)
+Both capture a refresh token for this machine, so the account switches across
+local clients. Do not clone Claude keychain credentials across machines; Claude
+refresh tokens rotate, and the first machine to refresh invalidates the stale
+copy.
 
 RUN A PROFILE SESSION  (this terminal only)
 "Run a profile session -> Codex / Claude" launches the CLI for ONE terminal, so
@@ -626,12 +622,9 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 เลือก "Add account -> Claude":
   Login with OAuth      - Claude subscription OAuth ตามปกติ
   Import current login  - ใช้ login ที่ Claude Code มีอยู่บนเครื่องนี้
-  Import credential     - วาง base64 credential จากอีกเครื่อง โดยรันบนเครื่องต้นทาง:
-                          security find-generic-password -s "Claude Code-credentials" \
-                            -w | base64 | tr -d "\n" | tee /dev/tty | pbcopy; echo
-                          (tee /dev/tty พิมพ์ผลออกมาให้เห็นว่าทำงานสำเร็จ)
-ทั้งสามเก็บ refresh token บัญชีจึงสลับได้ทุก client
-(base64 เป็น plaintext ถ้าต้องการย้ายแบบเข้ารหัสให้ใช้ Export / Import accounts)
+ทั้งสองวิธีเก็บ refresh token สำหรับเครื่องนี้ จึงสลับได้ใน local clients
+อย่า clone Claude keychain credential ข้ามเครื่อง เพราะ refresh token rotate;
+เครื่องแรกที่ refresh จะทำให้ copy เก่าใช้ต่อไม่ได้
 
 RUN A PROFILE SESSION  (เฉพาะ terminal นี้)
 "Run a profile session -> Codex / Claude" เปิด CLI สำหรับ terminal เดียว รันคู่ขนานกับ
@@ -920,13 +913,11 @@ interactive_menu() {
           sub="$(choose_from "Add Claude account (global switch)" \
             "$(menu_item claude-login "Login with OAuth" claude-login)" \
             "$(menu_item claude-import "Import current login" claude-import)" \
-            "$(menu_item claude-token "Import credential (base64 from another machine)" claude-import-blob)" \
           )" || continue
           sub="${sub##*::}"
           case "$sub" in
             claude-login) printf 'Account name: '; IFS= read -r name; login_claude "$name" ;;
             claude-import) printf 'Account name: '; IFS= read -r name; import_current_claude "$name" ;;
-            claude-import-blob) printf 'Account name: '; IFS= read -r name; import_claude_oauth_blob "$name" ;;
           esac
         fi
         ;;
