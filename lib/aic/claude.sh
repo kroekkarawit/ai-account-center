@@ -592,6 +592,54 @@ is_claude_token_expired() {
   (( now_ms >= expires_at ))
 }
 
+refresh_claude_oauth_account() {
+  local name="$1" source="$2" refresh_token scopes payload response body http_code org
+  local client_id="${CLAUDE_CODE_OAUTH_CLIENT_ID:-9d1c250a-e61b-44d9-88ed-5944d1962f5e}"
+  require_command curl
+  [[ -f "$source" ]] || return 1
+  [[ "$(claude_account_kind "$name")" == "oauth" ]] || return 1
+
+  refresh_token="$(jq -r '.claudeAiOauth.refreshToken // empty' "$source" 2>/dev/null)"
+  [[ -n "$refresh_token" ]] || return 1
+  scopes="$(jq -r '(.claudeAiOauth.scopes // ["user:profile","user:inference","user:sessions:claude_code","user:mcp_servers","user:file_upload"]) | join(" ")' "$source" 2>/dev/null)"
+  [[ -n "$scopes" ]] || scopes="user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+  payload="$(jq -nc \
+    --arg rt "$refresh_token" \
+    --arg client "$client_id" \
+    --arg scope "$scopes" \
+    '{grant_type:"refresh_token", refresh_token:$rt, client_id:$client, scope:$scope}')"
+
+  response="$(
+    curl -sS -w '\n%{http_code}' --max-time 30 \
+      -H "Accept: application/json" \
+      -H "Content-Type: application/json" \
+      -H "anthropic-beta: oauth-2025-04-20" \
+      -H "User-Agent: ai-account-center/$APP_VERSION" \
+      -d "$payload" \
+      "https://platform.claude.com/v1/oauth/token" 2>/dev/null
+  )"
+  body="${response%$'\n'*}"
+  http_code="${response##*$'\n'}"
+  [[ "$http_code" == "200" ]] || return 1
+  jq -e '.access_token and .expires_in' >/dev/null 2>&1 <<<"$body" || return 1
+
+  org="$(jq -r '.account.organization.uuid // empty' <<<"$body" 2>/dev/null || true)"
+  [[ -n "$org" ]] || org="$(jq -r '.organizationUuid // empty' "$source" 2>/dev/null || true)"
+  jq --argjson tok "$body" --arg org "$org" '
+    .claudeAiOauth.accessToken = $tok.access_token |
+    .claudeAiOauth.refreshToken = ($tok.refresh_token // .claudeAiOauth.refreshToken) |
+    .claudeAiOauth.expiresAt = ((now * 1000) + (($tok.expires_in // 0) * 1000) | floor) |
+    .claudeAiOauth.refreshTokenExpiresAt =
+      (if ($tok.refresh_token_expires_in // null) then
+        ((now * 1000) + ($tok.refresh_token_expires_in * 1000) | floor)
+      else .claudeAiOauth.refreshTokenExpiresAt end) |
+    .claudeAiOauth.scopes =
+      (if ($tok.scope // "") != "" then ($tok.scope | split(" ") | map(select(length > 0))) else .claudeAiOauth.scopes end) |
+    .organizationUuid = $org
+  ' "$source" >"$source.tmp" 2>/dev/null &&
+    chmod 600 "$source.tmp" && mv -f "$source.tmp" "$source"
+}
+
 running_claude_processes() {
   local claude_bin="" pid cmd
   claude_bin="$(command -v claude 2>/dev/null || true)"
@@ -691,25 +739,7 @@ switch_claude_impl() {
   if is_claude_token_expired "$source"; then
     printf '%sAccess token for %s is expired — refreshing before switch...%s\n' \
       "$YELLOW" "$name" "$RESET"
-    local live_blob merged
-    live_blob="$(current_claude_oauth_blob || printf '{}')"
-    merged="$(jq -n \
-      --argjson l "$live_blob" \
-      --argjson oauth "$(jq '.claudeAiOauth' "$source")" \
-      --arg org "$(jq -r '.organizationUuid // empty' "$source")" \
-      '$l | .claudeAiOauth = $oauth | .organizationUuid = $org')"
-    write_claude_keychain "$merged"
-    if claude auth status --json >/dev/null 2>&1; then
-      local refreshed_blob
-      refreshed_blob="$(current_claude_oauth_blob)"
-      jq -n \
-        --argjson oauth "$(jq '.claudeAiOauth' <<<"$refreshed_blob")" \
-        --arg org "$(jq -r '.organizationUuid // empty' <<<"$refreshed_blob")" \
-        --arg ts "$(jq -r '.created_at' "$source")" \
-        '{"claudeAiOauth":$oauth,"organizationUuid":$org,"created_at":$ts}' \
-        >"$source.tmp"
-      chmod 600 "$source.tmp"
-      mv -f "$source.tmp" "$source"
+    if refresh_claude_oauth_account "$name" "$source"; then
       printf 'Token refreshed.\n'
     else
       warn "Token refresh failed. Switching with stored token — Claude may require re-login."

@@ -361,7 +361,10 @@ test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/codex-p
 
 cat >"$TMP/bin/curl" <<'SH'
 #!/usr/bin/env bash
-if [[ "$*" == *"/api/oauth/usage"* ]]; then
+if [[ "$*" == *"https://platform.claude.com/v1/oauth/token"* ]]; then
+  printf '%s' '{"access_token":"new-usage-token","refresh_token":"new-usage-refresh","expires_in":28800,"refresh_token_expires_in":2592000,"scope":"user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload","token_type":"Bearer","account":{"organization":{"uuid":"usage-org-new"}}}'
+  [[ "$*" == *"%{http_code}"* ]] && printf '\n200'
+elif [[ "$*" == *"/api/oauth/usage"* ]]; then
   printf '%s\n' '{"five_hour":{"utilization":4,"resets_at":"2026-06-15T06:49:59Z"},"seven_day":{"utilization":13,"resets_at":"2026-06-20T07:59:59Z"}}'
 fi
 SH
@@ -371,6 +374,20 @@ chmod +x "$TMP/bin/curl"
 test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "usage_endpoint"
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "96"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "87"
+
+# Expired Claude OAuth access tokens are refreshed before probing
+# /api/oauth/usage, then the rotated refresh chain is synced back atomically.
+expired_usage_ms=$(( ($(date +%s) - 3600) * 1000 ))
+jq -n \
+  --argjson exp "$expired_usage_ms" \
+  '{claudeAiOauth:{accessToken:"old-usage-token",refreshToken:"old-usage-refresh",expiresAt:$exp,scopes:["user:inference","user:profile"]},organizationUuid:"usage-org",created_at:"2026-01-01T00:00:00Z"}' \
+  >"$AIC_DATA_DIR/accounts/claude/usage-expired.json"
+"$ROOT/bin/aic" refresh claude usage-expired
+test "$(jq -r '.claudeAiOauth.accessToken' "$AIC_DATA_DIR/accounts/claude/usage-expired.json")" = "new-usage-token"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/usage-expired.json")" = "new-usage-refresh"
+test "$(jq -r '.organizationUuid' "$AIC_DATA_DIR/accounts/claude/usage-expired.json")" = "usage-org-new"
+test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-usage-expired.json")" = "ok"
+remove_claude usage-expired >/dev/null
 
 # Claude recommendation/scoring — parity with Codex. Add a heavily-used second
 # account; the lightly-used one must win and be marked best.

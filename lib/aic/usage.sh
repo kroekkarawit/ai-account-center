@@ -154,6 +154,16 @@ refresh_claude_account() {
   }
   timeout_seconds="$(jq -r '.monitor.claude.timeout_seconds // 15' "$CONFIG_FILE")"
 
+  if is_claude_token_expired "$source"; then
+    if refresh_claude_oauth_account "$name" "$source"; then
+      token="$(jq -r '.claudeAiOauth.accessToken // empty' "$source")"
+      token="$(sanitize_claude_token "$token")"
+    else
+      write_error_usage claude "$name" "Stored Claude OAuth token is expired and could not be refreshed. Re-login from Add account -> Claude -> Login with OAuth."
+      return 1
+    fi
+  fi
+
   local response
   response="$(
     curl -sS --max-time "$timeout_seconds" \
@@ -169,8 +179,29 @@ refresh_claude_account() {
   if ! jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
     local message
     message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
-    write_error_usage claude "$name" "$message"
-    return 1
+    if [[ "$message" == "Invalid authentication credentials" ]] && refresh_claude_oauth_account "$name" "$source"; then
+      token="$(jq -r '.claudeAiOauth.accessToken // empty' "$source")"
+      token="$(sanitize_claude_token "$token")"
+      response="$(
+        curl -sS --max-time "$timeout_seconds" \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $token" \
+          -H "anthropic-beta: oauth-2025-04-20" \
+          -H "User-Agent: ai-account-center/$APP_VERSION" \
+          "https://api.anthropic.com/api/oauth/usage" 2>/dev/null
+      )"
+      usage="$response"
+      if jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
+        message=""
+      else
+        message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
+      fi
+    fi
+    [[ -z "$message" ]] || {
+      write_error_usage claude "$name" "$message"
+      return 1
+    }
   fi
 
   local destination
