@@ -485,12 +485,14 @@ recommendation_label() {
 }
 
 recommendation_reason() {
-  local five="$1" week="$2" reset5_hours="$3" resetw_hours="$4" stale="$5"
+  local provider="$1" five="$2" week="$3" reset5_hours="$4" resetw_hours="$5" stale="$6"
   local reasons=()
-  if awk "BEGIN { exit !($five <= 20) }"; then
-    reasons+=("5h usage is low")
-  elif awk "BEGIN { exit !($five >= 90) }"; then
-    reasons+=("5h usage is near limit")
+  if [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]]; then
+    if awk "BEGIN { exit !($five <= 20) }"; then
+      reasons+=("5h usage is low")
+    elif awk "BEGIN { exit !($five >= 90) }"; then
+      reasons+=("5h usage is near limit")
+    fi
   fi
   if awk "BEGIN { exit !($week <= 35) }"; then
     reasons+=("weekly usage is low")
@@ -500,7 +502,8 @@ recommendation_reason() {
   if [[ "$resetw_hours" != "-" ]] && awk "BEGIN { exit !($resetw_hours <= 24) }"; then
     reasons+=("weekly reset is near")
   fi
-  if [[ "$reset5_hours" != "-" ]] && awk "BEGIN { exit !($reset5_hours <= 1) }"; then
+  if [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] &&
+    [[ "$reset5_hours" != "-" ]] && awk "BEGIN { exit !($reset5_hours <= 1) }"; then
     reasons+=("5h reset is soon")
   fi
   [[ "$stale" == "1" ]] && reasons+=("usage data is stale")
@@ -521,10 +524,8 @@ recommendation_reason() {
   printf '%s' "$reason_text"
 }
 
-# Account scoring / recommendations. The math is provider-agnostic — every
-# account has a 5-hour window and a weekly window in the same usage-file shape —
-# so score_account works for both Codex and Claude. The per-provider wrappers
-# below only bind the provider namespace (usage files + <provider>_names).
+# Account scoring / recommendations. Codex's temporary removal of its 5-hour
+# restriction means only its weekly window is relevant; Claude retains both.
 score_account() {
   local provider="$1" name="$2" usage now status five week reset5 resetw checked checked_epoch stale=0
   usage="$(usage_file "$provider" "$name")"
@@ -543,7 +544,8 @@ score_account() {
 
   five="$(jq -r '.limits.five_hour.used_percent // empty' "$usage")"
   week="$(jq -r '.limits.weekly.used_percent // empty' "$usage")"
-  if [[ ! "$five" =~ ^[0-9]+([.][0-9]+)?$ || ! "$week" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  if [[ ! "$week" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    { [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] && ! [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "-80" "usage data is incomplete" "blocked" ""
     return
   fi
@@ -557,6 +559,7 @@ score_account() {
   fi
 
   awk -v name="$name" \
+    -v use_five_hour="$([[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] && printf 1 || printf 0)" \
     -v five="$five" \
     -v week="$week" \
     -v reset5="${reset5:-0}" \
@@ -573,12 +576,16 @@ score_account() {
     BEGIN {
       reset5_hours = reset5 > 0 ? (reset5 - now) / 3600 : -1
       resetw_hours = resetw > 0 ? (resetw - now) / 3600 : -1
-      score = (45 * (1 - five / 100)) + (25 * (1 - week / 100))
-      score += 10 * reset_bonus(reset5_hours, 0.5, 1, 2)
+      if (use_five_hour) {
+        score = (45 * (1 - five / 100)) + (25 * (1 - week / 100))
+        score += 10 * reset_bonus(reset5_hours, 0.5, 1, 2)
+        if (five >= 95) score -= 50
+        else if (five >= 90) score -= 30
+      } else {
+        score = 80 * (1 - week / 100)
+      }
       score += 15 * reset_bonus(resetw_hours, 6, 24, 72)
       score += stale ? 0 : 5
-      if (five >= 95) score -= 50
-      else if (five >= 90) score -= 30
       if (week >= 100) score -= 100
       else if (week >= 95) score -= 50
       else if (week >= 90) score -= 25
@@ -625,8 +632,9 @@ print_recommendation_bar() {
     five="-"
     week="-"
   fi
-  if [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ && "$week" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    reason="$(recommendation_reason "$five" "$week" "$reset5_hours" "$resetw_hours" "$stale")"
+  if [[ "$week" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
+    { [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]] || [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
+    reason="$(recommendation_reason "$provider" "$five" "$week" "$reset5_hours" "$resetw_hours" "$stale")"
   else
     reason="refresh usage first"
   fi
@@ -648,7 +656,11 @@ account_choice_label() {
   label="$(recommendation_label "$score")"
 
   if [[ ! -f "$usage" ]]; then
-    printf '%-18s [5h -- → -] [7d -- → -]  %s%s' "$name" "$label" "$suffix"
+    if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
+      printf '%-18s [7d -- → -]  %s%s' "$name" "$label" "$suffix"
+    else
+      printf '%-18s [5h -- → -] [7d -- → -]  %s%s' "$name" "$label" "$suffix"
+    fi
     return
   fi
 
@@ -661,8 +673,13 @@ account_choice_label() {
   week="$(jq -r '.limits.weekly.used_percent // "-"' "$usage")"
   reset5="$(format_reset "$usage" five_hour time)"
   resetw="$(format_reset "$usage" weekly datetime)"
-  printf '%-18s [5h %3s%% → %s] [7d %3s%% → %s]  %s%s' \
-    "$name" "$five" "$reset5" "$week" "$resetw" "$label" "$suffix"
+  if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
+    printf '%-18s [7d %3s%% → %s]  %s%s' \
+      "$name" "$week" "$resetw" "$label" "$suffix"
+  else
+    printf '%-18s [5h %3s%% → %s] [7d %3s%% → %s]  %s%s' \
+      "$name" "$five" "$reset5" "$week" "$resetw" "$label" "$suffix"
+  fi
 }
 
 codex_choice_label() { account_choice_label codex "$1" "$2" "$3"; }

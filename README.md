@@ -79,10 +79,11 @@ to select, and `Esc` or `q` to cancel. No TUI dependency such as `fzf` is
 required. The menu uses Unicode symbols (`◆`, `◇`, `↻`, `⏱`) when a UTF-8 locale
 is available, with an ASCII fallback otherwise.
 
-The dashboard at the top shows each stored account with a usage badge:
+The dashboard at the top shows each stored account with a usage badge. While
+OpenAI has temporarily removed Codex's 5-hour restriction, Codex shows only its
+7-day usage; Claude continues to show both windows:
 
 ```text
-[5h ██░░░░░░░░  22% -> 18:49]
 [7d █████████░  94% -> Jun 16, 16:50]
 ```
 

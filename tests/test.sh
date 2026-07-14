@@ -334,15 +334,15 @@ test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/codex-p
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "66"
 
 jq '.account = "company" |
-    .limits.five_hour.used_percent = 2 |
+    del(.limits.five_hour) |
     .limits.weekly.used_percent = 4 |
-    .limits.five_hour.resets_at_epoch = 1781506075 |
     .limits.weekly.resets_at_epoch = 1781603429' \
   "$AIC_DATA_DIR/usage/codex-personal.json" >"$AIC_DATA_DIR/usage/codex-company.json"
 output="$(print_codex_recommendations)"
 assert_contains "$output" "Best now: company"
 assert_contains "$output" "★ best"
-assert_contains "$output" "5h usage is low"
+assert_contains "$output" "weekly usage is low"
+case "$output" in *"5h usage"*) printf 'Codex recommendation must ignore the temporary 5h limit\n' >&2; exit 1 ;; esac
 
 switch_codex_impl company >/dev/null
 "$ROOT/bin/aic" refresh codex personal
@@ -422,11 +422,12 @@ test "$(claude_oauth_names | grep -c '^legacy-token$')" = "0"
 rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude/legacy-token.json"
 
 output="$("$ROOT/bin/aic" status)"
-assert_contains "$output" "[5h"
+assert_contains "$output" "LIMITS"
 assert_contains "$output" "13:49]"
 assert_contains "$output" "Jun 20, 14:59]"
 assert_contains "$output" "4% → 13:49"
 assert_contains "$output" "13% → Jun 20, 14:59"
+case "$(printf '%s\n' "$output" | rg '^CODEX')" in *"[5h"*) printf 'Codex status must hide the temporary 5h limit\n' >&2; exit 1 ;; esac
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
@@ -664,7 +665,7 @@ remove_claude personal >/dev/null
 test ! -f "$AIC_DATA_DIR/accounts/claude/personal.json"
 
 # Model profile tests — create profile directly (bypass interactive wizard)
-profile_file="$AIC_DATA_DIR/model-profiles/test-deepseek.json"
+deepseek_profile_file="$AIC_DATA_DIR/model-profiles/test-deepseek.json"
 jq -n '{
   name:"test-deepseek",
   display_name:"DeepSeek V4 Pro",
@@ -676,13 +677,13 @@ jq -n '{
   haiku_model:"deepseek-v4-flash",
   subagent_model:"deepseek-v4-flash",
   created_at:"2026-01-01T00:00:00Z"
-}' >"$profile_file"
-chmod 600 "$profile_file"
+}' >"$deepseek_profile_file"
+chmod 600 "$deepseek_profile_file"
 
 # list (model_profile_names + display name)
 output="$(model_profile_names)"
 assert_contains "$output" "test-deepseek"
-assert_contains "$(jq -r '.display_name' "$profile_file")" "DeepSeek V4 Pro"
+assert_contains "$(jq -r '.display_name' "$deepseek_profile_file")" "DeepSeek V4 Pro"
 
 # launch_with_profile: mock claude binary prints the env it receives
 cat >"$TMP/bin/claude" <<'SH'
@@ -709,6 +710,7 @@ cat >"$TMP/bin/codex" <<'SH'
 #!/usr/bin/env bash
 printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY:-}"
 printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL:-}"
+printf 'OVF_API_KEY=%s\n' "${OVF_API_KEY:-}"
 printf 'ARGS=%s\n' "$*"
 SH
 chmod +x "$TMP/bin/codex"
@@ -718,9 +720,68 @@ assert_contains "$output" "OPENAI_API_KEY=sk-test-deepseek-key"
 assert_contains "$output" "OPENAI_BASE_URL=https://api.deepseek.com"
 assert_contains "$output" 'ARGS=-c openai_base_url="https://api.deepseek.com" --model deepseek-v4-pro --no-alt-screen'
 
+codex_only_profile_file="$AIC_DATA_DIR/model-profiles/codex-only.json"
+jq -n '{
+  name:"codex-only",
+  display_name:"Codex Only",
+  base_url:"https://api.ovf-ai.online/v1",
+  api_key:"ovf-test-key",
+  default_model:"qwen3-coder:30b",
+  models:[
+    {id:"qwen3-coder:30b", name:"Qwen3 Coder 30B"},
+    {id:"qwen3.6:latest", name:"Qwen3.6 36B"},
+    {id:"gpt-oss:20b", name:"GPT OSS 20B"}
+  ],
+  codex_provider_id:"ovf_api",
+  codex_wire_api:"responses",
+  codex_env_key:"OVF_API_KEY",
+  opencode_provider_id:"ovf",
+  opencode_env_key:"OVF_API_KEY",
+  opencode_base_url_env:"OVF_API_BASE_URL",
+  claude_enabled:false,
+  targets:["codex","opencode"],
+  created_at:"2026-01-01T00:00:00Z"
+}' >"$codex_only_profile_file"
+chmod 600 "$codex_only_profile_file"
+
+profile_supports_target "$codex_only_profile_file" codex
+profile_supports_target "$codex_only_profile_file" opencode
+if profile_supports_target "$codex_only_profile_file" claude; then
+  printf 'Expected codex-only profile to be hidden from Claude\n' >&2
+  exit 1
+fi
+
+output="$(launch_codex_with_profile codex-only --no-alt-screen 2>/dev/null)"
+assert_contains "$output" "OVF_API_KEY=ovf-test-key"
+assert_contains "$output" 'ARGS=-c model_provider="ovf_api" -c model_providers.ovf_api.name="Codex Only" -c model_providers.ovf_api.base_url="https://api.ovf-ai.online/v1" -c model_providers.ovf_api.env_key="OVF_API_KEY" -c model_providers.ovf_api.wire_api="responses" --model qwen3-coder:30b --no-alt-screen'
+
+model_options="$(profile_model_options "$codex_only_profile_file")"
+assert_contains "$model_options" $'qwen3.6:latest\tQwen3.6 36B'
+
+output="$(AIC_PROFILE_MODEL_OVERRIDE='qwen3.6:latest' launch_codex_with_profile codex-only --no-alt-screen 2>/dev/null)"
+assert_contains "$output" '--model qwen3.6:latest --no-alt-screen'
+
+cat >"$TMP/bin/opencode" <<'SH'
+#!/usr/bin/env bash
+printf 'OVF_API_KEY=%s\n' "${OVF_API_KEY:-}"
+printf 'OVF_API_BASE_URL=%s\n' "${OVF_API_BASE_URL:-}"
+printf 'ARGS=%s\n' "$*"
+SH
+chmod +x "$TMP/bin/opencode"
+
+output="$(launch_opencode_with_profile codex-only run --no-color 2>/dev/null)"
+assert_contains "$output" "OVF_API_KEY=ovf-test-key"
+assert_contains "$output" "OVF_API_BASE_URL=https://api.ovf-ai.online/v1"
+assert_contains "$output" "ARGS=--model ovf/qwen3-coder:30b run --no-color"
+
+output="$(AIC_PROFILE_MODEL_OVERRIDE='gpt-oss:20b' launch_opencode_with_profile codex-only run --no-color 2>/dev/null)"
+assert_contains "$output" "ARGS=--model ovf/gpt-oss:20b run --no-color"
+
 # remove
 remove_model_profile test-deepseek >/dev/null
-test ! -f "$profile_file"
+test ! -f "$deepseek_profile_file"
+remove_model_profile codex-only >/dev/null
+test ! -f "$codex_only_profile_file"
 
 disable_schedule >/dev/null
 test "$(jq -r '.schedule.enabled' "$AIC_DATA_DIR/config.json")" = "false"
