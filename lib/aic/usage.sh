@@ -471,6 +471,12 @@ format_quota_badge() {
   printf '%s[%s %s %3.0f%% → %s]%s' "$color" "$label" "$bar" "$used" "$reset" "$RESET"
 }
 
+# OpenAI has temporarily removed the Codex 5-hour restriction. Keep the slot
+# visible so an absent badge is not mistaken for a missing usage refresh.
+format_codex_unlimited_badge() {
+  printf '%s[5h unlimited — temporary]%s' "$GREEN" "$RESET"
+}
+
 recommendation_label() {
   local score="$1"
   if awk "BEGIN { exit !($score >= 75) }"; then
@@ -657,7 +663,7 @@ account_choice_label() {
 
   if [[ ! -f "$usage" ]]; then
     if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
-      printf '%-18s [7d -- → -]  %s%s' "$name" "$label" "$suffix"
+      printf '%-18s [5h unlimited] [7d -- → -]  %s%s' "$name" "$label" "$suffix"
     else
       printf '%-18s [5h -- → -] [7d -- → -]  %s%s' "$name" "$label" "$suffix"
     fi
@@ -674,7 +680,7 @@ account_choice_label() {
   reset5="$(format_reset "$usage" five_hour time)"
   resetw="$(format_reset "$usage" weekly datetime)"
   if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
-    printf '%-18s [7d %3s%% → %s]  %s%s' \
+    printf '%-18s [5h unlimited] [7d %3s%% → %s]  %s%s' \
       "$name" "$week" "$resetw" "$label" "$suffix"
   else
     printf '%-18s [5h %3s%% → %s] [7d %3s%% → %s]  %s%s' \

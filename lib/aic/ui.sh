@@ -187,10 +187,10 @@ print_status() {
   active_codex="$(active_codex_name)"
   active_claude="$(active_claude_name)"
   local errors=()
-  printf '%s%-9s %-19s %s%s\n' \
-    "$BOLD" "PROVIDER" "ACCOUNT" "LIMITS" "$RESET"
-  printf '%s%-9s %-19s %s%s\n' \
-    "$DIM" "--------" "------------------" "-------------------------------------" "$RESET"
+  printf '%s%-9s %-19s %-29s %-38s%s\n' \
+    "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR STATUS" "7-DAY LIMIT" "$RESET"
+  printf '%s%-9s %-19s %-29s %-38s%s\n' \
+    "$DIM" "--------" "------------------" "----------------------------" "-------------------------------------" "$RESET"
 
   local provider provider_label provider_color dir file name usage marker status five week reset5 resetw
   for provider in codex claude; do
@@ -215,6 +215,8 @@ print_status() {
       if [[ ! -f "$usage" ]]; then
         printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
         if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
+          format_codex_unlimited_badge
+          printf ' '
           printf '%s%s%s\n' "$DIM" "[7d ░░░░░░░░░░  -- → -]" "$RESET"
         else
           printf '%s%s %s%s\n' \
@@ -231,7 +233,8 @@ print_status() {
         printf '%s%-9s%s %s%-18s %s' \
           "$provider_color" "$provider_label" "$RESET" "$marker" "$name" "$RED"
         if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
-          printf '%s%s\n' "[7d !!!!!!!!!! ERR → see errors]" "$RESET"
+          format_codex_unlimited_badge
+          printf ' %s%s\n' "[7d !!!!!!!!!! ERR → see errors]" "$RESET"
         else
           printf '%s %s%s\n' "[5h !!!!!!!!!! ERR → -]" "[7d !!!!!!!!!! ERR → see errors]" "$RESET"
         fi
@@ -243,7 +246,10 @@ print_status() {
       reset5="$(format_reset "$usage" five_hour time)"
       resetw="$(format_reset "$usage" weekly datetime)"
       printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
-      if [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]]; then
+      if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
+        format_codex_unlimited_badge
+        printf ' '
+      else
         format_quota_badge "5h" "$five" "$reset5"
         printf ' '
       fi
@@ -492,9 +498,10 @@ Esc / q         Cancel or close the current screen
 DASHBOARD
 The > marker identifies the active Codex account stored by Account Center.
 The percentage in each badge is usage consumed, not quota remaining. Codex's
-temporary 5-hour restriction has been removed, so Codex shows only its 7-day
-usage; Claude still shows both windows.
+5-hour restriction is temporarily unlimited; its 7-day usage still appears
+when Codex reports it. Claude shows both of its normal windows.
 
+  [5h unlimited — temporary]
   [7d █████████░  94% -> Jun 16, 16:50]
 
 Green means low usage, yellow means at least 70% used, and red means at least
@@ -602,9 +609,10 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 หน้า DASHBOARD
 เครื่องหมาย > แสดงบัญชี Codex ที่ active อยู่ใน Account Center
 เปอร์เซ็นต์ใน badge คือจำนวนที่ใช้ไปแล้ว ไม่ใช่จำนวนที่เหลือ
-ตอนนี้ Codex ปลด limit 5 ชั่วโมงชั่วคราว จึงแสดงเฉพาะ usage 7 วัน ส่วน Claude
-ยังแสดงทั้งสองช่วงเวลา
+ตอนนี้ Codex ปลด limit 5 ชั่วโมงชั่วคราว จะแสดงเป็น unlimited ส่วน usage 7 วัน
+จะแสดงเมื่อ Codex ส่งข้อมูลมา; Claude ยังแสดงทั้งสองช่วงเวลา
 
+  [5h unlimited — temporary]
   [7d █████████░  94% -> Jun 16, 16:50]
 
 สีเขียวหมายถึงใช้ไม่มาก สีเหลืองหมายถึงใช้ตั้งแต่ 70% และสีแดงหมายถึงใช้

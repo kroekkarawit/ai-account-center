@@ -422,12 +422,13 @@ test "$(claude_oauth_names | grep -c '^legacy-token$')" = "0"
 rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude/legacy-token.json"
 
 output="$("$ROOT/bin/aic" status)"
-assert_contains "$output" "LIMITS"
+assert_contains "$output" "5-HOUR STATUS"
+assert_contains "$output" "[5h unlimited — temporary]"
 assert_contains "$output" "13:49]"
 assert_contains "$output" "Jun 20, 14:59]"
 assert_contains "$output" "4% → 13:49"
 assert_contains "$output" "13% → Jun 20, 14:59"
-case "$(printf '%s\n' "$output" | rg '^CODEX')" in *"[5h"*) printf 'Codex status must hide the temporary 5h limit\n' >&2; exit 1 ;; esac
+assert_contains "$(printf '%s\n' "$output" | rg '^CODEX')" "[5h unlimited — temporary]"
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"
