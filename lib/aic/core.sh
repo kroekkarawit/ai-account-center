@@ -6,7 +6,7 @@
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.16.5"
+APP_VERSION="0.16.6"
 # OpenAI has temporarily removed Codex's 5-hour usage restriction. Keep this
 # switch in one place so the original view and scoring can be restored when the
 # restriction returns.

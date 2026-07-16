@@ -323,7 +323,11 @@ while IFS= read -r line; do
   if [[ "$id" == "1" ]]; then
     printf '%s\n' '{"id":1,"result":{"userAgent":"mock","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}'
   elif [[ "$id" == "2" ]]; then
-    printf '%s\n' '{"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"plus","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1781506075},"secondary":{"usedPercent":34,"windowDurationMins":10080,"resetsAt":1781603429}}}}'
+    if [[ "${AIC_TEST_CODEX_WEEKLY_PRIMARY:-}" == "1" ]]; then
+      printf '%s\n' '{"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"plus","primary":{"usedPercent":2,"windowDurationMins":10080,"resetsAt":1781603429},"secondary":null}}}'
+    else
+      printf '%s\n' '{"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"plus","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1781506075},"secondary":{"usedPercent":34,"windowDurationMins":10080,"resetsAt":1781603429}}}}'
+    fi
   fi
 done
 SH
@@ -333,9 +337,13 @@ chmod +x "$TMP/bin/codex"
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "88"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "66"
 
+AIC_TEST_CODEX_WEEKLY_PRIMARY=1 "$ROOT/bin/aic" refresh codex personal
+test "$(jq -r '.limits.five_hour.used_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "null"
+test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "98"
+
 jq '.account = "company" |
     del(.limits.five_hour) |
-    .limits.weekly.used_percent = 4 |
+    .limits.weekly.used_percent = 1 |
     .limits.weekly.resets_at_epoch = 1781603429' \
   "$AIC_DATA_DIR/usage/codex-personal.json" >"$AIC_DATA_DIR/usage/codex-company.json"
 output="$(print_codex_recommendations)"

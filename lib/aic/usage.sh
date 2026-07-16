@@ -107,7 +107,13 @@ refresh_codex_account() {
     --arg account "$name" \
     --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson limits "$limits" \
-    '{
+    '(
+      [$limits | .. | objects |
+        select(.usedPercent? != null and .windowDurationMins? != null)]
+    ) as $windows |
+    ($windows | map(select((.windowDurationMins // 0) <= 360)) | .[0] // {}) as $five_hour |
+    ($windows | map(select((.windowDurationMins // 0) >= 10080)) | .[0] // {}) as $weekly |
+    {
       provider:"codex",
       account:$account,
       checked_at:$checked,
@@ -115,14 +121,14 @@ refresh_codex_account() {
       plan_type:($limits.planType // null),
       limits:{
         five_hour:{
-          used_percent:($limits.primary.usedPercent // null),
-          remaining_percent:(100 - ($limits.primary.usedPercent // 0)),
-          resets_at_epoch:($limits.primary.resetsAt // null)
+          used_percent:($five_hour.usedPercent // null),
+          remaining_percent:(100 - ($five_hour.usedPercent // 0)),
+          resets_at_epoch:($five_hour.resetsAt // null)
         },
         weekly:{
-          used_percent:($limits.secondary.usedPercent // null),
-          remaining_percent:(100 - ($limits.secondary.usedPercent // 0)),
-          resets_at_epoch:($limits.secondary.resetsAt // null)
+          used_percent:($weekly.usedPercent // null),
+          remaining_percent:(100 - ($weekly.usedPercent // 0)),
+          resets_at_epoch:($weekly.resetsAt // null)
         }
       }
     }' >"$destination.tmp"
