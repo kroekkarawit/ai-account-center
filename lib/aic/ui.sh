@@ -520,7 +520,8 @@ Choose "Switch account -> Codex account", pick one, and press Enter; Account
 Center atomically replaces ~/.codex/auth.json. To run Codex with the active
 account afterward, just run `codex` in your terminal.
 
-Do not switch accounts while another Codex CLI process is still running.
+If Codex is open, Account Center shows each owning app, project, and whether its
+agent is WORKING or IDLE before asking to close the sessions and switch.
 
 CLAUDE ACCOUNTS
   Account (OAuth login)  - has a refresh token; switches GLOBALLY (written to
@@ -631,7 +632,8 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 ~/.codex/auth.json แบบ atomic จะเปิด Codex ด้วยบัญชีที่ active ก็รันคำสั่ง `codex`
 ได้เลย
 
-อย่าสลับบัญชีขณะที่ยังมี Codex CLI process อื่นกำลังทำงานอยู่
+ถ้า Codex เปิดอยู่ ระบบจะแสดง app เจ้าของ session, project และสถานะ agent ว่า
+WORKING หรือ IDLE ก่อนถามว่าจะปิด session ทั้งหมดแล้วสลับบัญชีหรือไม่
 
 บัญชี CLAUDE
   บัญชี (OAuth login) - มี refresh token สลับได้ระดับ GLOBAL (เขียนลง keychain

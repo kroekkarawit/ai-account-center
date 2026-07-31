@@ -98,8 +98,12 @@ Settings.
 **Switch account → Codex account / Claude account.** For Codex, the live
 `~/.codex/auth.json` is replaced atomically; the previous file is synced back to
 its stored account first (so refreshed tokens are not lost) and a timestamped
-backup is written. Do not switch while another Codex CLI process is running —
-the menu warns you and offers to close running sessions.
+backup is written. If Codex is open, the switch preview groups wrapper/native
+processes into real sessions and identifies the owning client (for example,
+Terminal, VS Code, Zed, or ChatGPT), project, TTY, age, attached tools, and
+whether its current turn is `WORKING` or `IDLE`. Turn state comes from Codex's
+live session events when available; `IDLE?` marks the best-effort fallback for
+older clients. The menu then offers to close all listed sessions.
 
 ### Add a Codex account
 

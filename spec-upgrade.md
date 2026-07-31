@@ -8,6 +8,26 @@ scripts are allowed only when they keep the operational model simple.
 
 ## Update Log
 
+### 2026-07-31 — Unreleased: Session-aware Codex switch preview
+
+The account-switch warning previously printed raw `pgrep` roots, then printed
+every terminated descendant as a separate `TERM:` line. Native/wrapper pairs
+looked like separate Codex instances, while Playwright, Vite, esbuild, and other
+agent-launched tools appeared without their owning session.
+
+- Collapse nested Codex roots into one user-visible session while retaining the
+  complete descendant tree for safe shutdown.
+- Identify Terminal/CLI, VS Code, Zed, ChatGPT, and generic app-server clients
+  from executable paths, TTY information, and parent ancestry.
+- Read lifecycle-only fields from rollout files already held open by Codex to
+  distinguish an unfinished `WORKING` turn from an `IDLE` completed/aborted
+  turn. Older clients without an exposed rollout use an explicit `IDLE?`
+  best-effort fallback.
+- Show project, TTY, process age, related-process count, and recognizable tools
+  such as Playwright MCP, browser control, code-mode host, Vite, and esbuild.
+- Replace the noisy per-descendant `TERM:` dump with a close summary; print an
+  individual PID only when escalation to `KILL` is actually required.
+
 ### 2026-07-09 — Unreleased: Remove Claude base64 credential import
 
 The `Import credential (base64 from another machine)` path cloned Claude's

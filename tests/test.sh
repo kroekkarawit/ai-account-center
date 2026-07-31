@@ -247,6 +247,7 @@ cat >"$TMP/bin/pgrep" <<'SH'
 #!/usr/bin/env bash
 if [[ "$*" == *codex* ]]; then
   printf '100 node /opt/homebrew/bin/codex\n'
+  printf '101 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex\n'
   exit 0
 fi
 exit 1
@@ -255,16 +256,35 @@ chmod +x "$TMP/bin/pgrep"
 cat >"$TMP/bin/ps" <<'SH'
 #!/usr/bin/env bash
 cat <<'OUT'
-100 1 node /opt/homebrew/bin/codex
-101 100 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex
-102 101 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex child-worker
+100 1 ttys001 S 0.0 01:15 node /opt/homebrew/bin/codex
+101 100 ttys001 S 0.0 01:15 /opt/homebrew/lib/node_modules/@openai/codex/vendor/bin/codex
+102 101 ttys001 S 0.0 00:30 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl
 OUT
 SH
 chmod +x "$TMP/bin/ps"
+mkdir -p "$HOME/project" "$TMP/sessions"
+idle_rollout="$TMP/sessions/idle-rollout.jsonl"
+cat >"$idle_rollout" <<JSONL
+{"type":"session_meta","payload":{"cwd":"$HOME/project"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+JSONL
+cat >"$TMP/bin/lsof" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" -p 101 "*) printf 'p101\\nn$idle_rollout\\n' ;;
+  *" -p 100 "*) printf 'p100\\nfcwd\\nn$HOME/project\\n' ;;
+esac
+SH
+chmod +x "$TMP/bin/lsof"
 kill_log="$TMP/kill.log"
 output="$(AIC_TEST_KILL_LOG="$kill_log" AIC_TEST_STILL_ALIVE_PIDS="101" AIC_KILL_GRACE_SECONDS=0 \
   switch_codex_impl company 2>&1)"
-assert_contains "$output" "Codex CLI is currently running"
+assert_contains "$output" "Codex sessions are currently open"
+assert_contains "$output" "IDLE    Terminal / CLI"
+assert_contains "$output" "Project: ~/project"
+assert_contains "$output" "Tools: browser control"
+assert_contains "$output" "1 session(s): 0 working, 1 idle"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 grep -q '^TERM 102$' "$kill_log"
 grep -q '^TERM 101$' "$kill_log"
@@ -277,13 +297,41 @@ cat >"$TMP/bin/pgrep" <<'SH'
 #!/usr/bin/env bash
 if [[ "$*" == *codex* ]]; then
   printf '23456 /Users/test/.vscode/extensions/openai.chatgpt-test/bin/macos-aarch64/codex app-server --analytics-default-enabled\n'
+  printf '26591 /Users/test/Library/Application Support/Zed/node/cache/codex app-server\n'
   exit 0
 fi
 exit 1
 SH
 chmod +x "$TMP/bin/pgrep"
+cat >"$TMP/bin/ps" <<'SH'
+#!/usr/bin/env bash
+cat <<'OUT'
+23456 900 ?? S 0.0 02:30 /Users/test/.vscode/extensions/openai.chatgpt-test/bin/macos-aarch64/codex app-server --analytics-default-enabled
+23457 23456 ?? S 0.0 00:10 npm exec @playwright/mcp@latest
+23458 23456 ?? S 2.0 00:08 /opt/tools/codex-code-mode-host
+26591 901 ?? S 0.0 05:20 /Users/test/Library/Application Support/Zed/node/cache/codex app-server
+OUT
+SH
+chmod +x "$TMP/bin/ps"
+working_rollout="$TMP/sessions/working-rollout.jsonl"
+cat >"$working_rollout" <<JSONL
+{"type":"session_meta","payload":{"cwd":"$HOME/project"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+JSONL
+cat >"$TMP/bin/lsof" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" -p 23456 "*) printf 'p23456\\nn$working_rollout\\n' ;;
+  *" -p 26591 "*) printf 'p26591\\nn$idle_rollout\\n' ;;
+esac
+SH
+chmod +x "$TMP/bin/lsof"
 output="$(switch_codex_impl company 2>&1)"
-assert_contains "$output" "VS Code Codex app-server is running"
+assert_contains "$output" "WORKING VS Code extension"
+assert_contains "$output" "IDLE    Zed extension"
+assert_contains "$output" "State: unfinished agent turn"
+assert_contains "$output" "Tools: Playwright MCP, code-mode host"
+assert_contains "$output" "2 session(s): 1 working, 1 idle"
 test "$(jq -r '.tokens.account_id' "$AIC_CODEX_HOME/auth.json")" = "account-company"
 mock_no_codex_processes
 switch_codex_impl personal >/dev/null
