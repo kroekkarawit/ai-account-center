@@ -477,8 +477,8 @@ format_quota_badge() {
   printf '%s[%s %s %3.0f%% → %s]%s' "$color" "$label" "$bar" "$used" "$reset" "$RESET"
 }
 
-# OpenAI has temporarily removed the Codex 5-hour restriction. Keep the slot
-# visible so an absent badge is not mistaken for a missing usage refresh.
+# Retained for an explicit provider-side suspension of Codex's five-hour limit.
+# The normal path renders the actual five-hour usage window.
 format_codex_unlimited_badge() {
   printf '%s[5h unlimited — temporary]%s' "$GREEN" "$RESET"
 }
@@ -536,8 +536,8 @@ recommendation_reason() {
   printf '%s' "$reason_text"
 }
 
-# Account scoring / recommendations. Codex's temporary removal of its 5-hour
-# restriction means only its weekly window is relevant; Claude retains both.
+# Account scoring / recommendations. Both providers normally use their
+# five-hour and weekly windows.
 score_account() {
   local provider="$1" name="$2" usage now status five week reset5 resetw checked checked_epoch stale=0
   usage="$(usage_file "$provider" "$name")"

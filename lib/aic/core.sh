@@ -7,10 +7,9 @@ export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/loca
 
 APP_NAME="AI Account Center"
 APP_VERSION="0.16.6"
-# OpenAI has temporarily removed Codex's 5-hour usage restriction. Keep this
-# switch in one place so the original view and scoring can be restored when the
-# restriction returns.
-CODEX_FIVE_HOUR_LIMIT_ENABLED=0
+# Codex has reinstated its 5-hour usage restriction. Keep this switch in one
+# place in case the service changes its rate-limit policy again.
+CODEX_FIVE_HOUR_LIMIT_ENABLED=1
 APP_REPO_URL="${AIC_REPO_URL:-https://github.com/kroekkarawit/ai-account-center}"
 APP_DIR="${AIC_APP_DIR:-$HOME/.local/share/ai-account-center}"
 APP_BIN_DIR="${AIC_INSTALL_DIR:-$HOME/.local/bin}"

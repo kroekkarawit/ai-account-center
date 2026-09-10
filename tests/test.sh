@@ -390,7 +390,9 @@ test "$(jq -r '.limits.five_hour.used_percent' "$AIC_DATA_DIR/usage/codex-person
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/codex-personal.json")" = "98"
 
 jq '.account = "company" |
-    del(.limits.five_hour) |
+    .limits.five_hour.used_percent = 1 |
+    .limits.five_hour.remaining_percent = 99 |
+    .limits.five_hour.resets_at_epoch = 1781506075 |
     .limits.weekly.used_percent = 1 |
     .limits.weekly.resets_at_epoch = 1781603429' \
   "$AIC_DATA_DIR/usage/codex-personal.json" >"$AIC_DATA_DIR/usage/codex-company.json"
@@ -398,7 +400,7 @@ output="$(print_codex_recommendations)"
 assert_contains "$output" "Best now: company"
 assert_contains "$output" "★ best"
 assert_contains "$output" "weekly usage is low"
-case "$output" in *"5h usage"*) printf 'Codex recommendation must ignore the temporary 5h limit\n' >&2; exit 1 ;; esac
+assert_contains "$output" "5h usage is low"
 
 switch_codex_impl company >/dev/null
 "$ROOT/bin/aic" refresh codex personal
@@ -479,12 +481,12 @@ rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude
 
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "5-HOUR STATUS"
-assert_contains "$output" "[5h unlimited — temporary]"
+assert_contains "$output" "[5h █░░░░░░░░░  12% → 13:47]"
 assert_contains "$output" "13:49]"
 assert_contains "$output" "Jun 20, 14:59]"
 assert_contains "$output" "4% → 13:49"
 assert_contains "$output" "13% → Jun 20, 14:59"
-assert_contains "$(printf '%s\n' "$output" | rg '^CODEX')" "[5h unlimited — temporary]"
+assert_contains "$(printf '%s\n' "$output" | rg '^CODEX')" "[5h █░░░░░░░░░  12% → 13:47]"
 
 output="$("$ROOT/bin/aic" --help)"
 assert_contains "$output" "AI Account Center"

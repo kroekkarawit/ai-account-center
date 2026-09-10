@@ -497,11 +497,10 @@ Esc / q         Cancel or close the current screen
 
 DASHBOARD
 The > marker identifies the active Codex account stored by Account Center.
-The percentage in each badge is usage consumed, not quota remaining. Codex's
-5-hour restriction is temporarily unlimited; its 7-day usage still appears
-when Codex reports it. Claude shows both of its normal windows.
+The percentage in each badge is usage consumed, not quota remaining. Codex and
+Claude show their 5-hour and 7-day usage windows when reported.
 
-  [5h unlimited — temporary]
+  [5h ███░░░░░░░  34% -> 16:50]
   [7d █████████░  94% -> Jun 16, 16:50]
 
 Green means low usage, yellow means at least 70% used, and red means at least
@@ -610,10 +609,9 @@ Esc / q           ยกเลิกหรือปิดหน้าปัจ�
 หน้า DASHBOARD
 เครื่องหมาย > แสดงบัญชี Codex ที่ active อยู่ใน Account Center
 เปอร์เซ็นต์ใน badge คือจำนวนที่ใช้ไปแล้ว ไม่ใช่จำนวนที่เหลือ
-ตอนนี้ Codex ปลด limit 5 ชั่วโมงชั่วคราว จะแสดงเป็น unlimited ส่วน usage 7 วัน
-จะแสดงเมื่อ Codex ส่งข้อมูลมา; Claude ยังแสดงทั้งสองช่วงเวลา
+Codex และ Claude จะแสดง usage ทั้งช่วง 5 ชั่วโมงและ 7 วันเมื่อมีข้อมูล
 
-  [5h unlimited — temporary]
+  [5h ███░░░░░░░  34% -> 16:50]
   [7d █████████░  94% -> Jun 16, 16:50]
 
 สีเขียวหมายถึงใช้ไม่มาก สีเหลืองหมายถึงใช้ตั้งแต่ 70% และสีแดงหมายถึงใช้
