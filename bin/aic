@@ -74,6 +74,7 @@ main() {
   require_command jq
   ensure_dirs
   reconcile_active_codex
+  reconcile_active_claude
 
   case "$command" in
     tui) interactive_menu ;;

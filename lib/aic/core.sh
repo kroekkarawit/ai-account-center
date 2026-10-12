@@ -6,7 +6,7 @@
 export PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 APP_NAME="AI Account Center"
-APP_VERSION="0.16.6"
+APP_VERSION="0.16.7"
 # Codex has reinstated its 5-hour usage restriction. Keep this switch in one
 # place in case the service changes its rate-limit policy again.
 CODEX_FIVE_HOUR_LIMIT_ENABLED=1

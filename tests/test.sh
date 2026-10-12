@@ -615,6 +615,118 @@ test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/perso
 switch_claude_impl personal >/dev/null
 test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "personal"
 
+# curl mock with a profile endpoint: the token prefix decides the account.
+cat >"$TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+all="$*"
+token="${all#*Bearer }"; token="${token%% *}"
+if [[ "$all" == *"https://platform.claude.com/v1/oauth/token"* ]]; then
+  if [[ "$all" == *"dead-rt"* ]]; then
+    printf '%s' '{"error":"invalid_grant","error_description":"Refresh token not found or invalid"}'
+    printf '\n400'
+    exit 0
+  fi
+  printf '%s' '{"access_token":"new-usage-token","refresh_token":"new-usage-refresh","expires_in":28800,"scope":"user:inference user:profile","account":{"organization":{"uuid":"usage-org-new"}}}'
+  [[ "$all" == *"%{http_code}"* ]] && printf '\n200'
+elif [[ "$all" == *"/api/oauth/profile"* ]]; then
+  case "$token" in
+    a-*) uuid=uuid-a email=alpha@example.com ;;
+    b-*|new-usage-token) uuid=uuid-b email=beta@example.com ;;
+    g-*) uuid=uuid-g email=gamma.user@example.com ;;
+    *) [[ "$all" == *"%{http_code}"* ]] && printf '401'; exit 0 ;;
+  esac
+  if [[ "$all" == *"%{http_code}"* ]]; then printf '200'; else
+    printf '{"account":{"uuid":"%s","email":"%s"},"organization":{"uuid":"org"}}' "$uuid" "$email"; fi
+elif [[ "$all" == *"/api/oauth/usage"* ]]; then
+  printf '%s\n' '{"five_hour":{"utilization":4,"resets_at":"2026-06-15T06:49:59Z"},"seven_day":{"utilization":13,"resets_at":"2026-06-20T07:59:59Z"}}'
+fi
+SH
+chmod +x "$TMP/bin/curl"
+
+# Two-account switching keeps both refresh chains alive: tokens the live client
+# rotated are written back to the outgoing account, and Claude Code's identity
+# (~/.claude.json oauthAccount) follows the swap.
+far_ms=4102444800000
+jq -n --argjson exp "$far_ms" '{claudeAiOauth:{accessToken:"a-at-1",refreshToken:"a-rt-1",expiresAt:($exp - 10)},organizationUuid:"org-a",oauthAccount:{accountUuid:"uuid-a",emailAddress:"alpha@example.com"},created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/alpha.json"
+jq -n --argjson exp "$far_ms" '{claudeAiOauth:{accessToken:"b-at-1",refreshToken:"b-rt-1",expiresAt:$exp},organizationUuid:"org-b",oauthAccount:{accountUuid:"uuid-b",emailAddress:"beta@example.com"},created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/beta.json"
+printf '{"theme":"dark","oauthAccount":{"accountUuid":"uuid-x","emailAddress":"x@example.com"}}\n' >"$HOME/.claude.json"
+switch_claude_impl alpha >/dev/null 2>&1
+test "$(jq -r '.oauthAccount.accountUuid' "$HOME/.claude.json")" = "uuid-a"
+test "$(jq -r '.theme' "$HOME/.claude.json")" = "dark"
+# Claude Code rotates alpha's tokens in the keychain while it is live…
+jq --argjson exp "$far_ms" '.claudeAiOauth.accessToken = "a-at-2" | .claudeAiOauth.refreshToken = "a-rt-2" | .claudeAiOauth.expiresAt = $exp' \
+  "$CLAUDE_CRED_FILE" >"$CLAUDE_CRED_FILE.tmp" && mv "$CLAUDE_CRED_FILE.tmp" "$CLAUDE_CRED_FILE"
+switch_claude_impl beta >/dev/null 2>&1
+# …and switching away saves them, so switching back uses the live chain.
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/alpha.json")" = "a-rt-2"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$CLAUDE_CRED_FILE")" = "b-rt-1"
+test "$(jq -r '.oauthAccount.accountUuid' "$HOME/.claude.json")" = "uuid-b"
+test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "beta"
+switch_claude_impl alpha >/dev/null 2>&1
+test "$(jq -r '.claudeAiOauth.refreshToken' "$CLAUDE_CRED_FILE")" = "a-rt-2"
+# Switching to the account that is already live is a no-op.
+switch_claude_impl alpha >/dev/null 2>&1
+test "$(jq -r '.claudeAiOauth.refreshToken' "$CLAUDE_CRED_FILE")" = "a-rt-2"
+
+# A live login that was never added is auto-saved (named from its email) before
+# a switch overwrites it, instead of being lost.
+printf '{"claudeAiOauth":{"accessToken":"g-at","refreshToken":"g-rt","expiresAt":%s}}\n' "$far_ms" >"$CLAUDE_CRED_FILE"
+printf '{"oauthAccount":{"accountUuid":"uuid-g","emailAddress":"gamma.user@example.com"}}\n' >"$HOME/.claude.json"
+reconcile_active_claude
+test "$(jq -r '.active_claude_account // empty' "$AIC_DATA_DIR/state.json")" = "alpha"   # alpha.json still exists
+switch_claude_impl beta >/dev/null 2>&1
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/gamma.user.json")" = "g-rt"
+test "$(jq -r '.oauthAccount.accountUuid' "$AIC_DATA_DIR/accounts/claude/gamma.user.json")" = "uuid-g"
+# A target whose saved login is dead is refused, and the current login stays.
+jq -n --argjson exp "$far_ms" '{claudeAiOauth:{accessToken:"d-at",refreshToken:"dead-rt",expiresAt:1000},organizationUuid:"org-d",created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/delta.json"
+before="$(cat "$CLAUDE_CRED_FILE")"
+if ( switch_claude_impl delta ) >/dev/null 2>&1; then
+  printf 'ERROR: switching to a dead Claude login should be refused\n' >&2
+  exit 1
+fi
+test "$(cat "$CLAUDE_CRED_FILE")" = "$before"
+test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "beta"
+# A valid-looking but revoked access token (profile 401) with a dead refresh token too.
+jq '.claudeAiOauth.expiresAt = 4102444800000' "$AIC_DATA_DIR/accounts/claude/delta.json" >"$TMP/d.tmp" && mv "$TMP/d.tmp" "$AIC_DATA_DIR/accounts/claude/delta.json"
+if ( switch_claude_impl delta ) >/dev/null 2>&1; then
+  printf 'ERROR: switching to a revoked Claude login should be refused\n' >&2
+  exit 1
+fi
+test "$(cat "$CLAUDE_CRED_FILE")" = "$before"
+rm -f "$AIC_DATA_DIR/accounts/claude/delta.json"
+# ~/.claude.json naming the wrong account (a running client rewrote it) never
+# causes the live tokens to be saved into that account.
+printf '{"oauthAccount":{"accountUuid":"uuid-a"}}\n' >"$HOME/.claude.json"
+jq '.claudeAiOauth.refreshToken = "b-rt-rotated" | .claudeAiOauth.accessToken = "b-at-rotated"' "$CLAUDE_CRED_FILE" >"$CLAUDE_CRED_FILE.tmp" && mv "$CLAUDE_CRED_FILE.tmp" "$CLAUDE_CRED_FILE"
+test "$(sync_live_claude_to_store 2>/dev/null)" = "beta"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/alpha.json")" = "a-rt-2"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/beta.json")" = "b-rt-rotated"
+printf '{"oauthAccount":{"accountUuid":"uuid-b"}}\n' >"$HOME/.claude.json"
+# Importing a login that is already stored under another name is refused.
+if ( save_current_claude_oauth beta-dupe ) >/dev/null 2>&1; then
+  printf 'ERROR: duplicate Claude login should not be saved twice\n' >&2
+  exit 1
+fi
+
+# Usage for the live account: an expired token is refreshed AND written back to
+# the keychain, so the running Claude Code never holds a used refresh token.
+jq '.claudeAiOauth.expiresAt = 1000' "$CLAUDE_CRED_FILE" >"$CLAUDE_CRED_FILE.tmp" && mv "$CLAUDE_CRED_FILE.tmp" "$CLAUDE_CRED_FILE"
+jq '.claudeAiOauth.expiresAt = 1000' "$AIC_DATA_DIR/accounts/claude/beta.json" >"$TMP/beta.tmp" && mv "$TMP/beta.tmp" "$AIC_DATA_DIR/accounts/claude/beta.json"
+refresh_claude_account beta
+test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-beta.json")" = "ok"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$CLAUDE_CRED_FILE")" = "new-usage-refresh"
+test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/beta.json")" = "new-usage-refresh"
+# A non-live account's refresh must leave the keychain alone.
+jq '.claudeAiOauth.expiresAt = 1000' "$AIC_DATA_DIR/accounts/claude/alpha.json" >"$TMP/alpha.tmp" && mv "$TMP/alpha.tmp" "$AIC_DATA_DIR/accounts/claude/alpha.json"
+jq '.claudeAiOauth.refreshToken = "beta-live-rt"' "$CLAUDE_CRED_FILE" >"$CLAUDE_CRED_FILE.tmp" && mv "$CLAUDE_CRED_FILE.tmp" "$CLAUDE_CRED_FILE"
+refresh_claude_account alpha
+test "$(jq -r '.claudeAiOauth.refreshToken' "$CLAUDE_CRED_FILE")" = "beta-live-rt"
+rm -f "$AIC_DATA_DIR/accounts/claude/"{alpha,beta,gamma.user}.json "$AIC_DATA_DIR/usage/claude-"{alpha,beta,gamma.user}.json "$HOME/.claude.json"
+switch_claude_impl personal >/dev/null 2>&1
+
 # Parallel-account session: "Run a profile session" candidate filter.
 jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},organizationUuid:"o-a",created_at:"t"}' \
   >"$AIC_DATA_DIR/accounts/claude/par-a.json"

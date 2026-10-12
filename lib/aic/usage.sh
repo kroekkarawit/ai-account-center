@@ -138,6 +138,18 @@ refresh_codex_account() {
   return 0
 }
 
+# Refresh an account's OAuth token for a usage probe. For the live global login
+# the rotated token is written back to the keychain under Claude Code's lock,
+# otherwise the running client would be left holding a used refresh token.
+_refresh_claude_for_usage() {
+  local name="$1" source="$2" is_live="$3"
+  refresh_claude_oauth_account "$name" "$source" || return 1
+  if [[ "$is_live" == "1" ]]; then
+    with_claude_credentials_lock _switch_claude_write "$source" keep-identity
+  fi
+  return 0
+}
+
 refresh_claude_account() {
   local name="$1"
   local source token timeout_seconds enabled
@@ -160,12 +172,28 @@ refresh_claude_account() {
   }
   timeout_seconds="$(jq -r '.monitor.claude.timeout_seconds // 15' "$CONFIG_FILE")"
 
+  # The stored copy of a live account is stale (Claude Code rotates tokens in its
+  # own credential store). Read the current tokens from where the account is
+  # running, and never rotate them behind that client's back.
+  local is_live=0 in_session=0
+  _resolve_live_claude || true
+  if [[ "$LIVE_VERIFIED" == "1" && "$LIVE_OWNER" == "$name" ]]; then
+    is_live=1
+    _adopt_claude_oauth "$name" "$(current_claude_oauth_blob | jq -c '.claudeAiOauth // empty' 2>/dev/null)" || true
+  elif claude_account_in_session "$name"; then
+    in_session=1
+    _adopt_claude_oauth "$name" "$(read_claude_session_credentials "$(claude_session_config_dir "$name")" 2>/dev/null | jq -c '.claudeAiOauth // empty' 2>/dev/null)" || true
+  fi
+  token="$(sanitize_claude_token "$(jq -r '.claudeAiOauth.accessToken // empty' "$source")")"
+
   if is_claude_token_expired "$source"; then
-    if refresh_claude_oauth_account "$name" "$source"; then
-      token="$(jq -r '.claudeAiOauth.accessToken // empty' "$source")"
-      token="$(sanitize_claude_token "$token")"
+    if [[ "$in_session" == "1" ]]; then
+      write_error_usage claude "$name" "Token expired; this account is running in a parallel session, which refreshes it. Try again shortly."
+      return 1
+    elif _refresh_claude_for_usage "$name" "$source" "$is_live"; then
+      token="$(sanitize_claude_token "$(jq -r '.claudeAiOauth.accessToken // empty' "$source")")"
     else
-      write_error_usage claude "$name" "Stored Claude OAuth token is expired and could not be refreshed. Re-login from Add account -> Claude -> Login with OAuth."
+      write_error_usage claude "$name" "Token expired and refresh failed (${CLAUDE_REFRESH_ERROR:-unknown}). Fix: Manage accounts -> $name -> Re-login OAuth."
       return 1
     fi
   fi
@@ -185,7 +213,8 @@ refresh_claude_account() {
   if ! jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
     local message
     message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
-    if [[ "$message" == "Invalid authentication credentials" ]] && refresh_claude_oauth_account "$name" "$source"; then
+    if [[ "$message" == "Invalid authentication credentials" && "$in_session" != "1" ]] &&
+       _refresh_claude_for_usage "$name" "$source" "$is_live"; then
       token="$(jq -r '.claudeAiOauth.accessToken // empty' "$source")"
       token="$(sanitize_claude_token "$token")"
       response="$(
@@ -205,10 +234,12 @@ refresh_claude_account() {
       fi
     fi
     [[ -z "$message" ]] || {
+      [[ -n "$CLAUDE_REFRESH_ERROR" ]] && message="$message (token refresh: $CLAUDE_REFRESH_ERROR). Fix: Manage accounts -> $name -> Re-login OAuth."
       write_error_usage claude "$name" "$message"
       return 1
     }
   fi
+  backfill_claude_account_identity "$name" || true
 
   local destination
   destination="$(usage_file claude "$name")"
@@ -246,6 +277,13 @@ refresh_claude_account() {
 refresh_all() {
   local mode="${1:-manual}" failures=0 successes=0 found=0 total=0
   local result_dir pids=() job_keys=() file name
+
+  # Once, before the parallel jobs: store the live Claude login's current tokens
+  # (saving it as a new account if it was never added) so its usage is real.
+  if [[ "$(jq -r '.monitor.claude.enabled // true' "$CONFIG_FILE")" == "true" ]]; then
+    sync_live_claude_to_store >/dev/null || true
+    reconcile_active_claude
+  fi
 
   for file in "$CODEX_ACCOUNTS_DIR"/*.json "$CLAUDE_ACCOUNTS_DIR"/*.json; do
     [[ -e "$file" ]] || continue
