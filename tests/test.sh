@@ -481,6 +481,12 @@ rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude
 
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "5-HOUR STATUS"
+# Width comes from the real terminal (no AIC_COLUMNS): run under a pty.
+if command -v script >/dev/null 2>&1; then
+  pty_out="$(script -q /dev/null bash -c "stty cols 90; unset AIC_COLUMNS; '$ROOT/bin/aic' status" </dev/null 2>&1 | tr -d '\r')"
+  assert_contains "$pty_out" "  ACCOUNT"
+  case "$pty_out" in *"5-HOUR STATUS"*) printf 'ERROR: 90-column terminal got the wide layout\n' >&2; exit 1 ;; esac
+fi
 # Narrow terminals (split panes) get the compact layout.
 compact="$(AIC_COLUMNS=80 "$ROOT/bin/aic" status)"
 assert_contains "$compact" "ACCOUNT"

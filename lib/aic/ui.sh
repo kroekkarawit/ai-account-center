@@ -172,7 +172,9 @@ print_dashboard_header() {
   timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
   schedule_text="$(next_refresh_countdown)"
 
-  if (( $(status_columns) < 110 )); then
+  local on_tty=""
+  [[ -t 1 ]] && on_tty=tty
+  if (( $(status_columns "$on_tty") < 110 )); then
     # Split-pane header: one line; the table's ">" already marks active accounts.
     printf '%s%sAI ACCOUNT CENTER%s %sv%s · refresh %s · %s%s\n' \
       "$CYAN" "$BOLD" "$RESET" "$DIM" "$APP_VERSION" "$schedule_text" "$timezone" "$RESET"
@@ -189,13 +191,16 @@ print_dashboard_header() {
   printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
 }
 
-# Terminal width for layout decisions. Non-terminal output (pipes, tests) gets
-# the wide layout unless AIC_COLUMNS says otherwise.
+# Terminal width for layout decisions. Pass "tty" when the caller's stdout is a
+# terminal — test `-t 1` into a variable first, because inside any $(...)
+# stdout is a pipe. Non-terminal output (pipes, tests) gets the wide layout unless
+# AIC_COLUMNS says otherwise.
 status_columns() {
   local cols="${AIC_COLUMNS:-}"
-  if [[ -z "$cols" && -t 1 ]]; then
-    cols="$(tput cols 2>/dev/null || true)"
-    [[ -n "$cols" ]] || cols="${COLUMNS:-}"
+  if [[ -z "$cols" && "${1:-}" == "tty" ]]; then
+    cols="$(stty size </dev/tty 2>/dev/null | awk '{print $2}')"
+    [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] || cols="$(tput cols </dev/tty 2>/dev/null || true)"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols="${COLUMNS:-}"
   fi
   [[ "$cols" =~ ^[0-9]+$ ]] || cols=200
   printf '%s' "$cols"
@@ -278,8 +283,9 @@ print_status_compact() {
 }
 
 print_status() {
-  local cols
-  cols="$(status_columns)"
+  local cols on_tty=""
+  [[ -t 1 ]] && on_tty=tty
+  cols="$(status_columns "$on_tty")"
   if (( cols < 110 )); then
     print_status_compact "$cols"
     return
