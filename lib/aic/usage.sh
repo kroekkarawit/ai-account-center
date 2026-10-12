@@ -492,7 +492,7 @@ quota_color() {
 }
 
 quota_bar() {
-  local used="$1" width=10 filled=0
+  local used="$1" width="${QUOTA_BAR_WIDTH:-10}" filled=0
   if [[ "$used" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     filled="$(awk -v value="$used" -v width="$width" \
       'BEGIN { n=int((value * width / 100) + 0.5); if(n<0)n=0; if(n>width)n=width; print n }')"
@@ -644,6 +644,80 @@ score_account() {
       if (score < -100) score = -100
       printf "%s\t%.0f\t%.2f\t%.2f\t%d\n", name, score, reset5_hours, resetw_hours, stale
     }'
+}
+
+# ---- Weekly pace (use it or lose it) ----------------------------------------
+# Weekly quota doesn't roll over, so the goal is ~100% used right at the reset
+# without hitting the cap early. Prints one tab-separated row:
+#   state used left_days need_per_day today_target diff days_to_cap
+# state: behind | on_pace | ahead | capped | done ; diff = used - even-pace used.
+weekly_pace() {
+  local provider="$1" name="$2" usage week resetw
+  usage="$(usage_file "$provider" "$name")"
+  [[ -f "$usage" && "$(jq -r '.status // ""' "$usage")" == "ok" ]] || return 1
+  week="$(jq -r '.limits.weekly.used_percent // empty' "$usage")"
+  [[ "$week" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+  resetw="$(reset_epoch "$usage" weekly)"
+  [[ "$resetw" =~ ^[0-9]+$ ]] || return 1
+  awk -v used="$week" -v reset="$resetw" -v now="$(date +%s)" '
+    BEGIN {
+      left = (reset - now) / 86400
+      if (left < 0) left = 0
+      if (left > 7) left = 7
+      elapsed = 7 - left
+      expected = elapsed / 7 * 100
+      diff = used - expected
+      remaining = 100 - used; if (remaining < 0) remaining = 0
+      need = left > 0 ? remaining / (left > 1 ? left : 1) : 0
+      if (need > 0 && need < 1) need = 1
+      today = used + need; if (today > 100) today = 100
+      to_cap = -1
+      if (elapsed >= 0.5 && used > 0) to_cap = remaining / (used / elapsed)
+      if (used >= 99.5) state = "done"
+      else if (to_cap >= 0 && to_cap < left - 0.5) state = (diff > 10 ? "ahead" : "on_pace")
+      else if (diff < -10) state = "behind"
+      else state = "on_pace"
+      if (used >= 100) state = "capped"
+      printf "%s\t%.0f\t%.1f\t%.0f\t%.0f\t%.0f\t%.1f\n", state, used, left, need, today, diff, to_cap
+    }'
+}
+
+format_days() {
+  awk -v d="$1" 'BEGIN {
+    if (d < 1) printf "%dh", d * 24 + 0.5
+    else printf "%dd %dh", int(d), (d - int(d)) * 24
+  }'
+}
+
+# Soonest-reset account that still has quota to burn (use it or lose it).
+pace_pick() {
+  local provider="$1" name row state used left best="" best_left=99
+  (( $("${provider}_names" | grep -c .) > 1 )) || return 0
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    row="$(weekly_pace "$provider" "$name")" || continue
+    IFS=$'\t' read -r state used left _ <<<"$row"
+    [[ "$state" == "behind" || "$state" == "on_pace" ]] || continue
+    if awk "BEGIN { exit !($left < $best_left) }"; then
+      best="$name" best_left="$left"
+    fi
+  done < <("${provider}_names")
+  printf '%s' "$best"
+}
+
+# Compact dashboard cell: ✓ on pace, ▼ behind (min %/day to not waste),
+# ▲ ahead (time until the cap at the current rate), ★ use this account first.
+pace_badge() {
+  local provider="$1" name="$2" pick="${3:-}" row state used left need today diff to_cap star=""
+  row="$(weekly_pace "$provider" "$name")" || return 0
+  IFS=$'\t' read -r state used left need today diff to_cap <<<"$row"
+  [[ -n "$pick" && "$pick" == "$name" ]] && star=" ★"
+  case "$state" in
+    behind)  printf '%s▼ %s%%/d%s%s' "$YELLOW" "$need" "$RESET" "$star" ;;
+    ahead)   printf '%s▲ cap %s%s%s' "$RED" "$(format_days "$to_cap" | tr -d ' ')" "$RESET" "$star" ;;
+    on_pace) printf '%s✓ %s%%/d%s%s' "$GREEN" "$need" "$RESET" "$star" ;;
+    *)       printf '%s– full%s' "$DIM" "$RESET" ;;
+  esac
 }
 
 score_codex_account() { score_account codex "$1"; }

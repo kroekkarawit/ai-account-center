@@ -481,6 +481,14 @@ rm -f "$AIC_DATA_DIR/accounts/claude/oauthy.json" "$AIC_DATA_DIR/accounts/claude
 
 output="$("$ROOT/bin/aic" status)"
 assert_contains "$output" "5-HOUR STATUS"
+# Narrow terminals (split panes) get the compact layout.
+compact="$(AIC_COLUMNS=80 "$ROOT/bin/aic" status)"
+assert_contains "$compact" "ACCOUNT"
+assert_contains "$compact" "█░░░░  12% 13:47"
+if printf '%s\n' "$compact" | perl -CS -ne 's/\e\[[0-9;]*m//g; chomp; $bad = 1 if length($_) > 80; END { exit($bad ? 0 : 1) }'; then
+  printf 'ERROR: compact status has a line wider than 80 columns\n' >&2
+  exit 1
+fi
 assert_contains "$output" "[5h █░░░░░░░░░  12% → 13:47]"
 assert_contains "$output" "13:49]"
 assert_contains "$output" "Jun 20, 14:59]"
@@ -1021,5 +1029,33 @@ test ! -f "$AIC_DATA_DIR/accounts/codex/xferbad.json"
 xfer_cdata="$(jq -c '.accounts[2].data' <<<"$xfer_dec")"
 transfer_write_account claude xferc2 "$xfer_cdata"
 test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/xferc2.json")" = "rtx-c"
+
+# Weekly pace: behind (would waste quota), ahead (would cap early), on pace.
+pace_usage() {
+  jq -n --arg n "$1" --argjson w "$2" --argjson r "$(( $(date +%s) + $3 ))" \
+    '{provider:"claude",account:$n,status:"ok",limits:{five_hour:{used_percent:0},weekly:{used_percent:$w,resets_at_epoch:$r}}}' \
+    >"$AIC_DATA_DIR/usage/claude-$1.json"
+}
+pace_usage pace-behind 10 $((2 * 86400))    # 5 days in, only 10% used
+test "$(weekly_pace claude pace-behind | cut -f1)" = "behind"
+test "$(weekly_pace claude pace-behind | cut -f4)" = "45"       # 90% over 2 days
+pace_usage pace-ahead 80 $((6 * 86400))     # 1 day in, 80% used
+test "$(weekly_pace claude pace-ahead | cut -f1)" = "ahead"
+pace_usage pace-even 50 $((7 * 86400 / 2))  # half-way, half used
+test "$(weekly_pace claude pace-even | cut -f1)" = "on_pace"
+pace_usage pace-full 100 86400
+test "$(weekly_pace claude pace-full | cut -f1)" = "capped"
+rm -f "$AIC_DATA_DIR/usage/claude-pace-"*.json
+
+# Resume commands after a switch: keep safe flags, never re-send a prompt or an
+# old --resume, and keep non-ASCII paths readable.
+test "$(claude_resume_command "/w/ไทย dir" sid-1 "--dangerously-skip-permissions --model opus --resume OLD fix the bug")" = \
+  "cd '/w/ไทย dir' && claude --dangerously-skip-permissions --model opus --resume sid-1"
+test "$(claude_resume_command /w sid-2 "")" = "cd /w && claude --resume sid-2"
+test "$(codex_resume_command /w cid " -m gpt-5 --search write tests")" = "cd /w && codex resume -m gpt-5 --search cid"
+test "$(codex_resume_command /w "" "")" = "cd /w && codex resume"
+test "$(zsh -c "print -r -- $(shell_quote "it's")" 2>/dev/null || bash -c "printf %s $(shell_quote "it's")")" = "it's"
+# No registry → nothing to restart, and the switch path stays quiet.
+test -z "$(claude_terminal_sessions)"
 
 printf 'All tests passed.\n'

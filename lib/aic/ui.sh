@@ -172,6 +172,13 @@ print_dashboard_header() {
   timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
   schedule_text="$(next_refresh_countdown)"
 
+  if (( $(status_columns) < 110 )); then
+    # Split-pane header: one line; the table's ">" already marks active accounts.
+    printf '%s%sAI ACCOUNT CENTER%s %sv%s · refresh %s · %s%s\n' \
+      "$CYAN" "$BOLD" "$RESET" "$DIM" "$APP_VERSION" "$schedule_text" "$timezone" "$RESET"
+    return 0
+  fi
+
   title_line="AI ACCOUNT CENTER  v$APP_VERSION"
   state_line="Active Codex: ${active:-none}  |  Next refresh: $schedule_text  |  TZ: $timezone"
   printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
@@ -182,18 +189,113 @@ print_dashboard_header() {
   printf '%s+------------------------------------------------------------------------------+%s\n' "$CYAN" "$RESET"
 }
 
+# Terminal width for layout decisions. Non-terminal output (pipes, tests) gets
+# the wide layout unless AIC_COLUMNS says otherwise.
+status_columns() {
+  local cols="${AIC_COLUMNS:-}"
+  if [[ -z "$cols" && -t 1 ]]; then
+    cols="$(tput cols 2>/dev/null || true)"
+    [[ -n "$cols" ]] || cols="${COLUMNS:-}"
+  fi
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=200
+  printf '%s' "$cols"
+}
+
+# Fit a plain-text line to WIDTH, ending in "…" when cut.
+fit_width() {
+  perl -CSA -e 'my ($t, $w) = @ARGV; print length($t) <= $w ? $t : substr($t, 0, $w - 1) . "\x{2026}"' -- "$1" "$2" 2>/dev/null ||
+    printf '%s' "$1"
+}
+
+compact_quota_cell() {
+  local used="$1" reset="$2" width="$3" color
+  if [[ ! "$used" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf "%s%-${width}s%s" "$DIM" "░░░░░   -- -" "$RESET"
+    return
+  fi
+  color="$(quota_color "$used")"
+  printf "%s%s %3.0f%% %-$((width - 11))s%s" "$color" "$(QUOTA_BAR_WIDTH=5 quota_bar "$used")" "$used" "$reset" "$RESET"
+}
+
+# Narrow layout (≤ ~72 columns) for split panes: providers become group
+# headings, bars shrink, and the weekly reset shows as "Sat 11:26".
+print_status_compact() {
+  local cols="$1" active_name provider dir file name usage marker status five week pick label color
+  local errors=() timezone epoch resetw
+  timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
+  printf '%s  %-17s %-18s %-20s %s%s\n' "$BOLD" "ACCOUNT" "5H" "7D" "PACE" "$RESET"
+  for provider in codex claude; do
+    if [[ "$provider" == "codex" ]]; then
+      dir="$CODEX_ACCOUNTS_DIR" color="$CYAN" active_name="$(active_codex_name)"
+    else
+      dir="$CLAUDE_ACCOUNTS_DIR" color="$MAGENTA" active_name="$(active_claude_name)"
+    fi
+    compgen -G "$dir/*.json" >/dev/null || continue
+    printf '%s%s%s\n' "$color$BOLD" "$(uppercase "$provider")" "$RESET"
+    pick="$(pace_pick "$provider")"
+    for file in "$dir"/*.json; do
+      [[ -e "$file" ]] || continue
+      name="$(basename "$file" .json)"
+      usage="$(usage_file "$provider" "$name")"
+      marker=" "
+      [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
+      printf ' %s%-17s ' "$marker" "$(fit_width "$name" 17)"
+      if [[ ! -f "$usage" ]]; then
+        printf '%sno usage yet — refresh%s\n' "$DIM" "$RESET"
+        continue
+      fi
+      status="$(jq -r '.status // "error"' "$usage")"
+      if [[ "$status" != "ok" ]]; then
+        errors+=("$provider/$name: $(jq -r '.error // "unknown"' "$usage")")
+        printf '%sERR — see errors below%s\n' "$RED" "$RESET"
+        continue
+      fi
+      five="$(jq -r '.limits.five_hour.used_percent // "-"' "$usage")"
+      week="$(jq -r '.limits.weekly.used_percent // "-"' "$usage")"
+      if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
+        printf "%s%-18s%s " "$GREEN" "unlimited" "$RESET"
+      else
+        compact_quota_cell "$five" "$(format_reset "$usage" five_hour time)" 18
+        printf ' '
+      fi
+      epoch="$(reset_epoch "$usage" weekly)"
+      resetw="-"
+      [[ -n "$epoch" ]] && resetw="$(TZ="$timezone" date -r "$epoch" '+%a %H:%M' 2>/dev/null ||
+        TZ="$timezone" date -d "@$epoch" '+%a %H:%M' 2>/dev/null)"
+      compact_quota_cell "$week" "$resetw" 20
+      printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
+    done
+  done
+  printf '%s✓ on track  ▼ behind (min/day)  ▲ caps early  ★ use first%s\n' "$DIM" "$RESET"
+
+  if [[ "${#errors[@]}" -gt 0 ]]; then
+    printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
+    local error
+    for error in "${errors[@]}"; do
+      printf '  %s!%s %s\n' "$RED" "$RESET" "$(fit_width "$error" $((cols - 5)))"
+    done
+  fi
+}
+
 print_status() {
+  local cols
+  cols="$(status_columns)"
+  if (( cols < 110 )); then
+    print_status_compact "$cols"
+    return
+  fi
   local active_codex active_claude active_name
   active_codex="$(active_codex_name)"
   active_claude="$(active_claude_name)"
   local errors=()
-  printf '%s%-9s %-19s %-29s %-38s%s\n' \
-    "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR STATUS" "7-DAY LIMIT" "$RESET"
-  printf '%s%-9s %-19s %-29s %-38s%s\n' \
-    "$DIM" "--------" "------------------" "----------------------------" "-------------------------------------" "$RESET"
+  printf '%s%-9s %-19s %-29s %-37s %s%s\n' \
+    "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR STATUS" "7-DAY LIMIT" "PACE" "$RESET"
+  printf '%s%-9s %-19s %-29s %-37s %s%s\n' \
+    "$DIM" "--------" "------------------" "----------------------------" "-------------------------------------" "---------" "$RESET"
 
-  local provider provider_label provider_color dir file name usage marker status five week reset5 resetw
+  local provider provider_label provider_color dir file name usage marker status five week reset5 resetw pick
   for provider in codex claude; do
+    pick="$(pace_pick "$provider")"
     provider_label="$(uppercase "$provider")"
     if [[ "$provider" == "codex" ]]; then
       dir="$CODEX_ACCOUNTS_DIR"
@@ -254,9 +356,10 @@ print_status() {
         printf ' '
       fi
       format_quota_badge "7d" "$week" "$resetw"
-      printf '\n'
+      printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
     done
   done
+  printf '%sPACE: ✓ on track · ▼ behind, min %%/day to not waste · ▲ hits cap before reset · ★ use first%s\n' "$DIM" "$RESET"
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
     printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"

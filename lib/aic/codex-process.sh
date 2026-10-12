@@ -384,9 +384,9 @@ warn_running_codex_for_switch() {
   table_file="$RUNTIME_DIR/process-table-warning-$$.txt"
   process_table >"$table_file"
   if [[ "$mode" == "confirm" ]]; then
-    warn "Codex sessions are currently open. Continuing will close every session below after the account switch."
+    warn "Codex sessions are currently open. Continuing will close every session below after the account switch; terminal tabs are reopened with \`codex resume\`."
   else
-    warn "Codex sessions are currently open. They will be closed after the account switch."
+    warn "Codex sessions are currently open. They will be closed after the account switch; terminal tabs are reopened with \`codex resume\`."
   fi
   describe_codex_sessions "$processes" "$table_file"
   rm -f "$table_file"
@@ -433,6 +433,9 @@ force_close_codex_processes_after_switch() {
   session_count="$(printf '%s\n' "$roots" | awk 'NF { count++ } END { print count+0 }')"
   process_count="$(printf '%s\n' "$pids" | awk 'NF { count++ } END { print count+0 }')"
 
+  local resume_rows
+  resume_rows="$(codex_resume_snapshot "$roots" "$table_file" 2>/dev/null || true)"
+
   printf '%sClosing %s Codex session(s) and %s process(es) so they reload the switched account.%s\n' \
     "$YELLOW" "$session_count" "$process_count" "$RESET" >&2
   while IFS= read -r pid; do
@@ -463,6 +466,7 @@ force_close_codex_processes_after_switch() {
   [[ "$kill_count" -eq 0 ]] && printf '  All targeted processes accepted TERM.\n' >&2
 
   rm -f "$table_file"
+  [[ -n "${AIC_TEST_KILL_LOG:-}" ]] || reopen_codex_sessions "$resume_rows"
 }
 
 confirm_switch_with_running_codex() {

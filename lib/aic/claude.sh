@@ -63,7 +63,8 @@ register_claude_session() {
 claude_pid_is_claude() {
   local pid="$1" args
   args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
-  [[ "$args" == *"/claude"* || "$args" == claude\ * || "$args" == *" claude "* ]]
+  [[ "$args" == claude || "$args" == *"/claude" || "$args" == *"/claude"\ * ||
+     "$args" == claude\ * || "$args" == *" claude "* ]]
 }
 
 # 0 if the account has a live parallel session; prunes a dead registration. The
@@ -813,14 +814,34 @@ running_claude_processes() {
   done < <(pgrep -f "$claude_bin" 2>/dev/null || true)
 }
 
+# Running Claude Code sessions keep the old account's token in memory. In the
+# interactive switch, offer to restart idle terminal sessions afterwards and
+# resume each chat in its own tab (see resume.sh). Sets CLAUDE_RESTART_AFTER_SWITCH.
+CLAUDE_RESTART_AFTER_SWITCH=0
 warn_running_claude_for_switch() {
-  local mode="${1:-warn}" procs
+  local mode="${1:-warn}" procs rows answer
+  CLAUDE_RESTART_AFTER_SWITCH=0
+  rows="$(claude_terminal_sessions)"
+  if [[ -n "$rows" ]]; then
+    printf '%sOpen Claude Code sessions (they keep the old account until restarted):%s\n' "$YELLOW" "$RESET" >&2
+    describe_claude_terminal_sessions "$rows"
+    [[ "$mode" == "confirm" ]] || return 0
+    answer="$(choose_from "Switch account and…" \
+      "Restart idle sessions and resume their chats (busy ones are left alone)::restart" \
+      "Just switch (restart sessions myself later)::switch" \
+      "Cancel::cancel")" || return 1
+    case "${answer##*::}" in
+      restart) CLAUDE_RESTART_AFTER_SWITCH=1 ;;
+      switch) ;;
+      *) return 1 ;;
+    esac
+    return 0
+  fi
   procs="$(running_claude_processes || true)"
   [[ -n "$procs" ]] || return 0
   warn "Claude is currently running. The new account takes effect on next launch."
   printf '%s\n' "$procs" >&2
   [[ "$mode" == "confirm" ]] || return 0
-  local answer
   answer="$(choose_from "Continue with switch?" "No, cancel" "Yes, switch anyway")" || return 1
   [[ "$answer" == *"Yes"* ]] || return 1
 }
@@ -967,6 +988,10 @@ switch_claude_impl() {
   set_active_claude_name "$name"
   printf 'Active Claude account: %s%s\n' "$name" \
     "$(claude_account_email "$name" | sed 's/^/ (/; s/$/)/')"
+  if [[ "$CLAUDE_RESTART_AFTER_SWITCH" == "1" ]]; then
+    CLAUDE_RESTART_AFTER_SWITCH=0
+    restart_claude_sessions_after_switch
+  fi
 }
 
 interactive_claude_use() {
