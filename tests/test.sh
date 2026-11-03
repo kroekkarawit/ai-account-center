@@ -433,6 +433,37 @@ test "$(jq -r '.source' "$AIC_DATA_DIR/usage/claude-personal.json")" = "usage_en
 test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "96"
 test "$(jq -r '.limits.weekly.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "87"
 
+# Claude's usage endpoint can return five_hour: null (no 5h window). That is a
+# valid response: weekly alone must be recorded, scored and recommended.
+cp "$TMP/bin/curl" "$TMP/curl-two-windows"
+cat >"$TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *"/api/oauth/usage"* ]]; then
+  printf '%s\n' '{"five_hour":null,"seven_day":{"utilization":11,"resets_at":"2026-06-20T07:59:59Z"}}'
+fi
+SH
+chmod +x "$TMP/bin/curl"
+"$ROOT/bin/aic" refresh claude personal
+test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-personal.json")" = "ok"
+test "$(jq -r '.limits.five_hour.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "null"
+test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "null"
+test "$(jq -r '.limits.weekly.used_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "11"
+score="$(score_account claude personal | cut -f2)"
+[[ "$score" -gt 0 ]] || { printf 'null-5h Claude account was blocked (score %s)\n' "$score" >&2; exit 1; }
+output="$(print_claude_recommendation_bar)"
+assert_contains "$output" "weekly usage is low"
+[[ "$output" != *"5h"* && "$output" != *"refresh usage first"* ]] || { printf '%s\n' "$output" >&2; exit 1; }
+# Errors (e.g. 429) are still errors.
+cat >"$TMP/bin/curl" <<'SH'
+#!/usr/bin/env bash
+[[ "$*" == *"/api/oauth/usage"* ]] && printf '%s\n' '{"error":{"type":"rate_limit_error","message":"Rate limited. Please try again later."}}'
+SH
+"$ROOT/bin/aic" refresh claude personal >/dev/null 2>&1 || true
+test "$(jq -r '.status' "$AIC_DATA_DIR/usage/claude-personal.json")" = "error"
+mv "$TMP/curl-two-windows" "$TMP/bin/curl"
+"$ROOT/bin/aic" refresh claude personal
+test "$(jq -r '.limits.five_hour.remaining_percent' "$AIC_DATA_DIR/usage/claude-personal.json")" = "96"
+
 # Expired Claude OAuth access tokens are refreshed before probing
 # /api/oauth/usage, then the rotated refresh chain is synced back atomically.
 expired_usage_ms=$(( ($(date +%s) - 3600) * 1000 ))

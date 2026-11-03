@@ -44,6 +44,12 @@ write_error_usage() {
   mv -f "$destination.tmp" "$destination"
 }
 
+# /api/oauth/usage returns five_hour: null for accounts without a 5-hour window
+# (seen since 2026-11), so only seven_day is required for a usable response.
+claude_usage_response_ok() {
+  jq -e '(.seven_day | type) == "object"' >/dev/null 2>&1 <<<"$1"
+}
+
 refresh_codex_account() {
   local name="$1"
   local mode="${2:-manual}"
@@ -210,7 +216,7 @@ refresh_claude_account() {
   )"
 
   local usage="$response" source_type="usage_endpoint"
-  if ! jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
+  if ! claude_usage_response_ok "$response"; then
     local message
     message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
     if [[ "$message" == "Invalid authentication credentials" && "$in_session" != "1" ]] &&
@@ -227,7 +233,7 @@ refresh_claude_account() {
           "https://api.anthropic.com/api/oauth/usage" 2>/dev/null
       )"
       usage="$response"
-      if jq -e '.five_hour and .seven_day' >/dev/null 2>&1 <<<"$response"; then
+      if claude_usage_response_ok "$response"; then
         message=""
       else
         message="$(jq -r '.error.message // .message // "Claude usage request failed."' <<<"$response" 2>/dev/null)"
@@ -257,7 +263,7 @@ refresh_claude_account() {
       limits:{
         five_hour:{
           used_percent:($usage.five_hour.utilization // null),
-          remaining_percent:(100 - ($usage.five_hour.utilization // 0)),
+          remaining_percent:(if $usage.five_hour.utilization == null then null else 100 - $usage.five_hour.utilization end),
           resets_at:($usage.five_hour.resets_at // null),
           resets_at_epoch:($usage.five_hour.resets_at_epoch // null)
         },
@@ -534,10 +540,22 @@ recommendation_label() {
   fi
 }
 
+# The 5h window is mandatory for Codex only when its toggle is on. Claude uses
+# it whenever the API reports one (it may be null; then weekly alone decides).
+five_hour_required() {
+  [[ "$1" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]]
+}
+
+five_hour_counts() {
+  local provider="$1" five="$2"
+  [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] &&
+    [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
 recommendation_reason() {
   local provider="$1" five="$2" week="$3" reset5_hours="$4" resetw_hours="$5" stale="$6"
   local reasons=()
-  if [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]]; then
+  if five_hour_counts "$provider" "$five"; then
     if awk "BEGIN { exit !($five <= 20) }"; then
       reasons+=("5h usage is low")
     elif awk "BEGIN { exit !($five >= 90) }"; then
@@ -552,7 +570,7 @@ recommendation_reason() {
   if [[ "$resetw_hours" != "-" ]] && awk "BEGIN { exit !($resetw_hours <= 24) }"; then
     reasons+=("weekly reset is near")
   fi
-  if [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] &&
+  if five_hour_counts "$provider" "$five" &&
     [[ "$reset5_hours" != "-" ]] && awk "BEGIN { exit !($reset5_hours <= 1) }"; then
     reasons+=("5h reset is soon")
   fi
@@ -595,7 +613,7 @@ score_account() {
   five="$(jq -r '.limits.five_hour.used_percent // empty' "$usage")"
   week="$(jq -r '.limits.weekly.used_percent // empty' "$usage")"
   if [[ ! "$week" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
-    { [[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] && ! [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
+    { five_hour_required "$provider" && ! [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "-80" "usage data is incomplete" "blocked" ""
     return
   fi
@@ -609,7 +627,7 @@ score_account() {
   fi
 
   awk -v name="$name" \
-    -v use_five_hour="$([[ "$provider" != "codex" || "$CODEX_FIVE_HOUR_LIMIT_ENABLED" == "1" ]] && printf 1 || printf 0)" \
+    -v use_five_hour="$(five_hour_counts "$provider" "$five" && printf 1 || printf 0)" \
     -v five="$five" \
     -v week="$week" \
     -v reset5="${reset5:-0}" \
@@ -757,7 +775,7 @@ print_recommendation_bar() {
     week="-"
   fi
   if [[ "$week" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
-    { [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]] || [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
+    { ! five_hour_required "$provider" || [[ "$five" =~ ^[0-9]+([.][0-9]+)?$ ]]; }; then
     reason="$(recommendation_reason "$provider" "$five" "$week" "$reset5_hours" "$resetw_hours" "$stale")"
   else
     reason="refresh usage first"
