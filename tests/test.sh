@@ -1067,6 +1067,65 @@ xfer_cdata="$(jq -c '.accounts[2].data' <<<"$xfer_dec")"
 transfer_write_account claude xferc2 "$xfer_cdata"
 test "$(jq -r '.claudeAiOauth.refreshToken' "$AIC_DATA_DIR/accounts/claude/xferc2.json")" = "rtx-c"
 
+# Inactive accounts: switching to them is blocked, and they leave every picker.
+switch_codex_impl personal >/dev/null
+set_account_inactive codex xfera 0
+is_account_inactive codex xfera
+if ( switch_codex_impl xfera ) >/dev/null 2>&1; then echo "FAIL: switched to inactive account"; exit 1; fi
+test "$(active_codex_name)" = "personal"
+test "$(codex_recommendations | grep -c "^xfera"$'\t')" = "0"
+inactive_accounts_note codex | grep -q "xfera"
+test -z "$(pace_pick codex | grep -x xfera)"
+# an internal restore can still bypass the guard
+AIC_ALLOW_INACTIVE=1 switch_codex_impl xfera >/dev/null
+switch_codex_impl personal >/dev/null
+# rename carries the flag, remove-less clear re-enables it
+rename_codex_account xfera xfera2 >/dev/null
+is_account_inactive codex xfera2
+! is_account_inactive codex xfera
+rename_codex_account xfera2 xfera >/dev/null
+clear_account_inactive codex xfera
+! is_account_inactive codex xfera
+switch_codex_impl xfera >/dev/null
+switch_codex_impl personal >/dev/null
+test -z "$(inactive_accounts_note codex)"
+# timed holds expire on their own
+set_account_inactive codex xfera $(( $(date +%s) + 3600 ))
+is_account_inactive codex xfera
+inactive_label codex xfera | grep -q "^inactive until "
+set_account_inactive codex xfera $(( $(date +%s) - 1 ))
+! is_account_inactive codex xfera
+clear_account_inactive codex xfera
+# Claude: an inactive account is not a parallel candidate and can't be launched
+jq -n '{claudeAiOauth:{accessToken:"a",refreshToken:"r",expiresAt:0,scopes:[]},created_at:"t"}' \
+  >"$AIC_DATA_DIR/accounts/claude/held.json"
+test "$(claude_parallel_candidates | grep -c '^held$')" = "1"
+set_account_inactive claude held 0
+test "$(claude_parallel_candidates | grep -c '^held$')" = "0"
+test "$(claude_recommendations | grep -c "^held"$'\t')" = "0"
+if ( launch_claude_parallel held ) >/dev/null 2>&1; then echo "FAIL: launched inactive parallel account"; exit 1; fi
+output="$( ( switch_claude_impl held ) 2>&1 || true)"
+[[ "$output" == *"switching to it is blocked"* ]] || { echo "FAIL: inactive Claude switch not blocked: $output"; exit 1; }
+remove_claude held >/dev/null
+test -z "$(account_inactive_until claude held)"
+# a stale flag on the target name is not inherited by a rename
+set_account_inactive codex ghost 0
+rename_codex_account xfera ghost >/dev/null
+! is_account_inactive codex ghost
+rename_codex_account ghost xfera >/dev/null
+# every account inactive: say so instead of "no accounts found"
+for n in $(codex_names); do set_account_inactive codex "$n" 0; done
+test -z "$(codex_recommendations)"
+print_codex_recommendation_bar | grep -q "Every Codex account is marked inactive"
+output="$(interactive_use 2>&1 </dev/null || true)"
+[[ "$output" == *"Every Codex account is marked inactive"* ]] || { echo "FAIL: all-inactive picker message: $output"; exit 1; }
+for n in $(codex_names); do clear_account_inactive codex "$n"; done
+test -z "$(inactive_accounts_note codex)"
+# a corrupt or missing state file never blocks switching
+cp "$STATE_FILE" "$TMP/state.bak"; printf 'not json' >"$STATE_FILE"
+! is_account_inactive codex xfera
+cp "$TMP/state.bak" "$STATE_FILE"
+
 # Weekly pace: behind (would waste quota), ahead (would cap early), on pace.
 pace_usage() {
   jq -n --arg n "$1" --argjson w "$2" --argjson r "$(( $(date +%s) + $3 ))" \

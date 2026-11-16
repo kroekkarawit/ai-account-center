@@ -169,6 +169,22 @@ re-login, re-import (Codex), update token (Claude), and remove. Removing an
 active Codex profile does **not** delete the live `~/.codex/auth.json` and does
 not log the account out — it only removes Account Center's saved copy.
 
+### Inactive accounts (temporarily block switching)
+
+**Manage accounts → *account* → Mark inactive** blocks switching to an account —
+useful when someone else is using it heavily and its quota could run out in the
+middle of your work. Choose a duration (1h, 5h, 24h, 7d) or **until I turn it
+back on**; timed holds expire on their own. While inactive, the account:
+
+- is hidden from the switch pickers, recommendations, the `★ use first` pace
+  pick, and the parallel-session list (a dim note shows what was hidden);
+- refuses any switch or parallel launch with a warning;
+- shows `‖` in front of its name on the dashboard.
+
+Marking the current global account inactive does not log it out — it stays live
+until you switch to another account. **Mark active** turns it back on. The flag
+is stored in `state.json` and follows the account through a rename.
+
 ### Move accounts to another machine (export / import)
 
 The top-level **Export / Import accounts** menu bundles the accounts you pick

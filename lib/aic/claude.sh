@@ -92,6 +92,7 @@ claude_parallel_candidates() {
     [[ -n "$name" ]] || continue
     [[ "$(claude_account_kind "$name")" == "oauth" ]] || continue
     [[ "$name" == "$active" ]] && continue
+    is_account_inactive claude "$name" && continue
     printf '%s\n' "$name"
   done < <(claude_names)
 }
@@ -307,6 +308,7 @@ launch_claude_oauth_session() {
 
 launch_claude_parallel() {
   local name="$1"; shift
+  refuse_if_inactive claude "$name" || return 1
   case "$(claude_account_kind "$name")" in
     oauth) launch_claude_oauth_session "$name" "$@" ;;
     *) die "Claude account '$name' is not a full OAuth login. Re-add it with: Add account → Claude → Login with OAuth." ;;
@@ -716,7 +718,7 @@ relogin_claude_oauth() {
       printf 'Re-login complete for account: %s\n' "$name"
       # Re-login is a repair, not a switch: put the previous global login back.
       if [[ -n "$previous" && "$previous" != "$name" && -f "$(claude_account_file "$previous")" ]]; then
-        switch_claude_impl "$previous" && printf 'Global Claude account restored to: %s\n' "$previous"
+        AIC_ALLOW_INACTIVE=1 switch_claude_impl "$previous" && printf 'Global Claude account restored to: %s\n' "$previous"
       fi
       return 0
     fi
@@ -955,6 +957,7 @@ switch_claude_impl() {
   local source
   source="$(claude_account_file "$name")"
   [[ -f "$source" ]] || die "Unknown Claude account: $name"
+  refuse_if_inactive claude "$name" || return 1
   local refresh_token
   refresh_token="$(jq -r '.claudeAiOauth.refreshToken // empty' "$source" 2>/dev/null)"
   [[ -n "$refresh_token" ]] ||
@@ -1000,6 +1003,7 @@ interactive_claude_use() {
   local options=() best_name="" name score rest item label
   # Make sure the current login is saved (and listed) before choosing.
   sync_live_claude_to_store >/dev/null || true
+  inactive_accounts_note claude
   while IFS=$'\t' read -r name score rest; do
     [[ -n "$name" ]] || continue
     [[ "$(claude_account_kind "$name")" == "oauth" ]] || continue
@@ -1014,6 +1018,10 @@ interactive_claude_use() {
   done < <(claude_recommendations)
 
   if [[ "${#options[@]}" -eq 0 ]]; then
+    if [[ -n "$(inactive_accounts_note claude)" ]]; then
+      warn "Every switchable Claude account is marked inactive. Turn one back on in Manage accounts."
+      return 1
+    fi
     warn "No switchable Claude accounts yet. Add one from: Add account → Claude → Login with OAuth."
     return 1
   fi
@@ -1030,6 +1038,7 @@ remove_claude() {
   file="$(claude_account_file "$name")"
   [[ -f "$file" ]] || die "Unknown Claude account: $name"
   rm -f "$file" "$(usage_file claude "$name")" "$(claude_session_pid_file "$name")"
+  clear_account_inactive claude "$name"
   printf 'Removed Claude account: %s\n' "$name"
 }
 
@@ -1048,5 +1057,6 @@ rename_claude_account() {
   old_usage="$(usage_file claude "$old_name")"
   new_usage="$(usage_file claude "$new_name")"
   [[ -f "$old_usage" ]] && mv "$old_usage" "$new_usage" || true
+  rename_account_inactive claude "$old_name" "$new_name"
   printf 'Renamed Claude account: %s → %s\n' "$old_name" "$new_name"
 }

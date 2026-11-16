@@ -65,6 +65,11 @@ menu_icon() {
   fi
 }
 
+# One-column dashboard marker for an inactive account (⏸ can render 2 wide).
+inactive_marker() {
+  if supports_utf8; then printf '‖'; else printf '#'; fi
+}
+
 menu_item() {
   local icon="$1" text="$2" action="$3"
   printf '%s  %s::%s' "$(menu_icon "$icon")" "$text" "$action"
@@ -113,8 +118,18 @@ manage_account_menu() {
     )
   fi
 
+  local pkey; pkey="$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')"
+  if is_account_inactive "$pkey" "$name"; then
+    # Switching would be refused anyway, so offer "Mark active" in its place.
+    local opt kept=()
+    for opt in "${sub_options[@]}"; do [[ "$opt" == *::switch ]] || kept+=("$opt"); done
+    sub_options=("▶  Mark active (allow switching again)::activate" "${kept[@]}")
+  else
+    sub_options+=("⏸  Mark inactive (block switching to it)::deactivate")
+  fi
+
   local sub_action new_name
-  sub_action="$(choose_from "Manage $provider: $name" "${sub_options[@]}")" || return 1
+  sub_action="$(choose_from "Manage $provider: $name$(is_account_inactive "$pkey" "$name" && printf '  [%s]' "$(inactive_label "$pkey" "$name")")" "${sub_options[@]}")" || return 1
   sub_action="${sub_action##*::}"
 
   case "$sub_action" in
@@ -152,6 +167,13 @@ manage_account_menu() {
     reimport)
       with_lock reimport_codex_auth_json "$name"
       ;;
+    activate)
+      clear_account_inactive "$pkey" "$name"
+      printf '%s account %s is active again — it can be switched to.\n' "$provider" "$name"
+      ;;
+    deactivate)
+      mark_account_inactive_interactive "$pkey" "$name"
+      ;;
     remove)
       local answer
       answer="$(choose_from "Remove $provider account '$name'?" "No, cancel" "Yes, remove it")" || return 1
@@ -164,6 +186,28 @@ manage_account_menu() {
       fi
       ;;
   esac
+}
+
+# Ask how long, then mark the account inactive. "Until I turn it back on"
+# is the default; timed holds expire on their own.
+mark_account_inactive_interactive() {
+  local provider="$1" name="$2" choice until=0 active
+  choice="$(choose_from "Block switching to '$name' for how long?" \
+    "Until I turn it back on::0" \
+    "1 hour::3600" \
+    "5 hours::18000" \
+    "24 hours::86400" \
+    "7 days::604800")" || return 1
+  choice="${choice##*::}"
+  (( choice > 0 )) && until=$(( $(date +%s) + choice ))
+  set_account_inactive "$provider" "$name" "$until"
+  printf 'Account %s marked %s. It is hidden from switch lists and cannot be switched to.\n' \
+    "$name" "$(inactive_label "$provider" "$name")"
+  if [[ "$provider" == "codex" ]]; then active="$(active_codex_name)"; else active="$(active_claude_name)"; fi
+  [[ "$active" == "$name" ]] &&
+    printf '%sNote: %s is the current global account. It stays active until you switch to another one.%s\n' \
+      "$YELLOW" "$name" "$RESET"
+  return 0
 }
 
 print_dashboard_header() {
@@ -243,6 +287,7 @@ print_status_compact() {
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
       marker=" "
+      is_account_inactive "$provider" "$name" && marker="$(inactive_marker)"
       [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
       printf ' %s%-17s ' "$marker" "$(fit_width "$name" 17)"
       if [[ ! -f "$usage" ]]; then
@@ -271,7 +316,7 @@ print_status_compact() {
       printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
     done
   done
-  printf '%s✓ on track  ▼ behind (min/day)  ▲ caps early  ★ use first%s\n' "$DIM" "$RESET"
+  printf '%s✓ on track  ▼ behind (min/day)  ▲ caps early  ★ use first  %s inactive%s\n' "$DIM" "$(inactive_marker)" "$RESET"
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
     printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
@@ -318,6 +363,7 @@ print_status() {
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
       marker=" "
+      is_account_inactive "$provider" "$name" && marker="$(inactive_marker)"
       [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
 
       if [[ ! -f "$usage" ]]; then
@@ -365,7 +411,7 @@ print_status() {
       printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
     done
   done
-  printf '%sPACE: ✓ on track · ▼ behind, min %%/day to not waste · ▲ hits cap before reset · ★ use first%s\n' "$DIM" "$RESET"
+  printf '%sPACE: ✓ on track · ▼ behind, min %%/day to not waste · ▲ hits cap before reset · ★ use first · %s inactive (switching blocked)%s\n' "$DIM" "$(inactive_marker)" "$RESET"
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
     printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
@@ -678,6 +724,15 @@ remove a single account. Removing an active Codex profile does not delete the
 live ~/.codex/auth.json and does not log the account out; it only removes
 Account Center's saved copy.
 
+INACTIVE ACCOUNTS
+"Manage accounts -> Mark inactive" blocks switching to an account, e.g. while
+someone else is using it heavily and its quota could run out mid-task. Pick a
+duration (1h, 5h, 24h, 7d) or "until I turn it back on". While inactive the
+account is hidden from switch lists, recommendations, and parallel sessions,
+and any switch to it is refused. The dashboard marks it with ‖. If it is the
+current global account it stays live until you switch away. Turn it back on
+with "Manage accounts -> Mark active".
+
 DIAGNOSTICS
 Help -> Diagnostics prints environment, command paths, token expiry, and a
 live rate-limit check for troubleshooting.
@@ -782,6 +837,14 @@ Claude full OAuth ใช้ usage endpoint
 "Manage accounts" ให้สลับ, refresh, เปลี่ยนชื่อ, re-login, re-import หรือลบ
 บัญชีทีละบัญชี ถ้าลบ Codex account ที่ active ระบบจะไม่ลบ ~/.codex/auth.json
 และไม่ logout แต่จะลบเฉพาะสำเนาที่ Account Center เก็บไว้
+
+บัญชี INACTIVE (ห้ามสลับชั่วคราว)
+"Manage accounts -> Mark inactive" ใช้ห้ามสลับมาใช้บัญชีนั้น เช่น ตอนที่มีคนอื่นใช้
+บัญชีนี้หนัก ๆ แล้ว quota อาจหมดกลางงาน เลือกระยะเวลาได้ (1h, 5h, 24h, 7d) หรือ
+"จนกว่าจะเปิดกลับเอง" ระหว่างนี้บัญชีจะถูกซ่อนจากรายการสลับ, คำแนะนำ และ parallel
+session และการสลับไปบัญชีนี้จะถูกปฏิเสธ แดชบอร์ดจะแสดงเครื่องหมาย ‖ ถ้าเป็นบัญชี
+global ที่ใช้อยู่ตอนนี้ จะยังใช้ได้จนกว่าจะสลับไปบัญชีอื่น เปิดกลับได้ที่
+"Manage accounts -> Mark active"
 
 DIAGNOSTICS
 Help -> Diagnostics แสดงข้อมูล environment, path ของคำสั่ง, วันหมดอายุ token

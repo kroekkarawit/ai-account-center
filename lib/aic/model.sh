@@ -418,6 +418,7 @@ interactive_claude_launch() {
     run=""; claude_account_in_session "$name" && run="  ⏵ running"
     options+=("$name  —  parallel account ($kind)${badge:+  $badge}${run}::acct:$name")
   done < <(claude_parallel_candidates)
+  inactive_accounts_note claude
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue

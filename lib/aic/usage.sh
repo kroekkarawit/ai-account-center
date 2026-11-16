@@ -713,6 +713,7 @@ pace_pick() {
   (( $("${provider}_names" | grep -c .) > 1 )) || return 0
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    is_account_inactive "$provider" "$name" && continue
     row="$(weekly_pace "$provider" "$name")" || continue
     IFS=$'\t' read -r state used left _ <<<"$row"
     [[ "$state" == "behind" || "$state" == "on_pace" ]] || continue
@@ -741,10 +742,12 @@ pace_badge() {
 score_codex_account() { score_account codex "$1"; }
 score_claude_account() { score_account claude "$1"; }
 
+# Inactive accounts are left out: they are never recommended or offered.
 provider_recommendations() {
   local provider="$1" name
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    is_account_inactive "$provider" "$name" && continue
     score_account "$provider" "$name"
   done < <("${provider}_names") | sort -t $'\t' -k2,2nr
 }
@@ -761,7 +764,11 @@ print_recommendation_bar() {
   best_fn="best_${provider}_recommendation"
   best="$("$best_fn")"
   [[ -n "$best" ]] || {
-    printf '%sRecommendation%s\n  No %s accounts found.\n\n' "$BOLD" "$RESET" "$label"
+    if [[ -n "$("${provider}_names")" ]]; then
+      printf '%sRecommendation%s\n  Every %s account is marked inactive.\n\n' "$BOLD" "$RESET" "$label"
+    else
+      printf '%sRecommendation%s\n  No %s accounts found.\n\n' "$BOLD" "$RESET" "$label"
+    fi
     return 0
   }
 
@@ -844,6 +851,18 @@ print_recommendations() {
 
 print_codex_recommendations() { print_recommendations codex Codex; }
 print_claude_recommendations() { print_recommendations claude Claude; }
+
+# Picker footnote: "2 inactive accounts hidden: a, b" (nothing when none).
+inactive_accounts_note() {
+  local provider="$1" name list="" count=0
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && is_account_inactive "$provider" "$name" || continue
+    list="${list:+$list, }$name" count=$((count + 1))
+  done < <("${provider}_names")
+  (( count > 0 )) || return 0
+  printf '%s⏸ %d inactive hidden: %s  (Manage accounts → Mark active)%s\n' \
+    "$DIM" "$count" "$list" "$RESET"
+}
 
 uppercase() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'

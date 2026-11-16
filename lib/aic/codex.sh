@@ -274,6 +274,7 @@ switch_codex_impl() {
   source="$(codex_account_file "$name")"
   auth="$CODEX_HOME_DIR/auth.json"
   [[ -f "$source" ]] || die "Unknown Codex account: $name"
+  refuse_if_inactive codex "$name" || return 1
   validate_codex_auth "$source" || die "Stored auth for '$name' is invalid."
   warn_running_codex_for_switch "$process_mode" || return 1
 
@@ -309,6 +310,7 @@ remove_codex_impl() {
     clear_active_codex_name
   fi
   rm -f "$file" "$(usage_file codex "$name")"
+  clear_account_inactive codex "$name"
   printf 'Removed Codex account: %s\n' "$name"
   if [[ "$active" == "$name" ]]; then
     printf 'The live %s/auth.json was left unchanged.\n' "$CODEX_HOME_DIR"
@@ -332,6 +334,7 @@ rename_codex_account() {
   local active
   active="$(active_codex_name)"
   [[ "$active" == "$old_name" ]] && set_active_codex_name "$new_name"
+  rename_account_inactive codex "$old_name" "$new_name"
   printf 'Renamed Codex account: %s → %s\n' "$old_name" "$new_name"
 }
 
@@ -359,6 +362,7 @@ relogin_codex_browser() {
 interactive_use() {
   local options=() best best_name line name score reset5_hours resetw_hours stale item
   print_codex_recommendation_bar
+  inactive_accounts_note codex
   best="$(best_codex_recommendation)"
   best_name="${best%%$'\t'*}"
   while IFS=$'\t' read -r name score reset5_hours resetw_hours stale; do
@@ -366,7 +370,11 @@ interactive_use() {
     options+=("$(codex_choice_label "$name" "$best_name" "$score")::$name")
   done < <(codex_recommendations)
   [[ "${#options[@]}" -gt 0 ]] || {
-    warn "No Codex accounts have been added."
+    if [[ -n "$(codex_names)" ]]; then
+      warn "Every Codex account is marked inactive. Turn one back on in Manage accounts."
+    else
+      warn "No Codex accounts have been added."
+    fi
     return 1
   }
   item="$(choose_from "Select Codex account" "${options[@]}")" || return 1

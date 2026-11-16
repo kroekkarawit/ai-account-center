@@ -173,6 +173,71 @@ clear_active_claude_name() {
   mv -f "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
+# ---- Inactive accounts -------------------------------------------------------
+# An account marked inactive can't be switched to (or run in parallel), e.g.
+# while someone else is burning its quota. Stored in state.json as
+# .inactive.<provider>.<name> = until-epoch (0 = until turned back on).
+# An expired "until" counts as active again.
+account_inactive_until() {
+  jq -r --arg p "$1" --arg n "$2" '.inactive[$p][$n] // empty' "$STATE_FILE" 2>/dev/null
+}
+
+is_account_inactive() {
+  local until
+  until="$(account_inactive_until "$1" "$2")"
+  [[ "$until" =~ ^[0-9]+$ ]] || return 1
+  (( until == 0 || until > $(date +%s) ))
+}
+
+_write_state() {
+  jq "$@" "$STATE_FILE" >"$STATE_FILE.tmp" || die "Could not update state."
+  chmod 600 "$STATE_FILE.tmp"
+  mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+set_account_inactive() {
+  local provider="$1" name="$2" until="${3:-0}"
+  _write_state --arg p "$provider" --arg n "$name" --argjson u "$until" '.inactive[$p][$n] = $u'
+}
+
+clear_account_inactive() {
+  _write_state --arg p "$1" --arg n "$2" 'if .inactive[$p] then .inactive[$p] |= del(.[$n]) else . end'
+}
+
+rename_account_inactive() {
+  local provider="$1" old="$2" new="$3" until
+  until="$(account_inactive_until "$provider" "$old")"
+  # Drop any stale flag on the target name so a rename never inherits it.
+  clear_account_inactive "$provider" "$new"
+  [[ -n "$until" ]] || return 0
+  clear_account_inactive "$provider" "$old"
+  set_account_inactive "$provider" "$new" "$until"
+}
+
+# Human text for an inactive account: "inactive" or "inactive until 18:30".
+inactive_label() {
+  local until timezone
+  until="$(account_inactive_until "$1" "$2")"
+  if [[ "$until" =~ ^[0-9]+$ ]] && (( until > 0 )); then
+    timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE" 2>/dev/null)"
+    printf 'inactive until %s' "$(TZ="$timezone" date -r "$until" '+%a %H:%M' 2>/dev/null ||
+      TZ="$timezone" date -d "@$until" '+%a %H:%M' 2>/dev/null)"
+  else
+    printf 'inactive'
+  fi
+}
+
+# Switch guard. AIC_ALLOW_INACTIVE=1 bypasses it for internal restores.
+refuse_if_inactive() {
+  local provider="$1" name="$2"
+  [[ "${AIC_ALLOW_INACTIVE:-0}" == "1" ]] && return 0
+  is_account_inactive "$provider" "$name" || return 0
+  local label=Codex; [[ "$provider" == "claude" ]] && label=Claude
+  warn "$label account '$name' is $(inactive_label "$provider" "$name") — switching to it is blocked."
+  printf 'Turn it back on with: Manage accounts → %s → Mark active\n' "$name" >&2
+  return 1
+}
+
 with_lock() {
   local command_name="$1"
   shift
