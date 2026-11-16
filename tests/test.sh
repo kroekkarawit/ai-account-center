@@ -606,7 +606,7 @@ test "$(jq -r '.active_claude_account' "$AIC_DATA_DIR/state.json")" = "switch-te
 
 # The dashboard marks the active Claude account with ">" (same as Codex).
 output="$("$ROOT/bin/aic" status)"
-assert_contains "$output" ">switch-test"
+assert_contains "$output" "> switch-test"
 
 # Claude credential lock: cooperates with Claude Code's ~/.claude.lock so a swap
 # never interleaves with a running claude's token refresh.

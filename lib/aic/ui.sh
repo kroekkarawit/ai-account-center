@@ -70,6 +70,19 @@ inactive_marker() {
   if supports_utf8; then printf '‖'; else printf '#'; fi
 }
 
+# Two-column account marker for the dashboard: a colored "> " (active) or
+# "‖ " (inactive), else blank, so the name never sits flush against it.
+account_marker() {
+  local provider="$1" name="$2" active_name="$3"
+  if [[ -n "$active_name" && "$active_name" == "$name" ]]; then
+    printf '%s%s>%s ' "$GREEN" "$BOLD" "$RESET"
+  elif is_account_inactive "$provider" "$name"; then
+    printf '%s%s%s ' "$YELLOW" "$(inactive_marker)" "$RESET"
+  else
+    printf '  '
+  fi
+}
+
 menu_item() {
   local icon="$1" text="$2" action="$3"
   printf '%s  %s::%s' "$(menu_icon "$icon")" "$text" "$action"
@@ -272,7 +285,7 @@ print_status_compact() {
   local cols="$1" active_name provider dir file name usage marker status five week pick label color
   local errors=() timezone epoch resetw
   timezone="$(jq -r '.display.timezone // "Asia/Bangkok"' "$CONFIG_FILE")"
-  printf '%s  %-17s %-18s %-20s %s%s\n' "$BOLD" "ACCOUNT" "5H" "7D" "PACE" "$RESET"
+  printf '%s   %-16s %-18s %-20s %s%s\n' "$BOLD" "ACCOUNT" "5H" "7D" "PACE" "$RESET"
   for provider in codex claude; do
     if [[ "$provider" == "codex" ]]; then
       dir="$CODEX_ACCOUNTS_DIR" color="$CYAN" active_name="$(active_codex_name)"
@@ -286,10 +299,8 @@ print_status_compact() {
       [[ -e "$file" ]] || continue
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
-      marker=" "
-      is_account_inactive "$provider" "$name" && marker="$(inactive_marker)"
-      [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
-      printf ' %s%-17s ' "$marker" "$(fit_width "$name" 17)"
+      marker="$(account_marker "$provider" "$name" "$active_name")"
+      printf ' %s%-16s ' "$marker" "$(fit_width "$name" 16)"
       if [[ ! -f "$usage" ]]; then
         printf '%sno usage yet — refresh%s\n' "$DIM" "$RESET"
         continue
@@ -316,7 +327,7 @@ print_status_compact() {
       printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
     done
   done
-  printf '%s✓ on track  ▼ behind (min/day)  ▲ caps early  ★ use first  %s inactive%s\n' "$DIM" "$(inactive_marker)" "$RESET"
+  printf '%s✓ on track  ▼ behind (min/day)  ▲ caps early  ★ use first  %s%s%s%s inactive%s\n' "$DIM" "$YELLOW" "$(inactive_marker)" "$RESET" "$DIM" "$RESET"
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
     printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
@@ -339,10 +350,10 @@ print_status() {
   active_codex="$(active_codex_name)"
   active_claude="$(active_claude_name)"
   local errors=()
-  printf '%s%-9s %-19s %-29s %-37s %s%s\n' \
+  printf '%s%-9s   %-17s %-29s %-37s %s%s\n' \
     "$BOLD" "PROVIDER" "ACCOUNT" "5-HOUR STATUS" "7-DAY LIMIT" "PACE" "$RESET"
-  printf '%s%-9s %-19s %-29s %-37s %s%s\n' \
-    "$DIM" "--------" "------------------" "----------------------------" "-------------------------------------" "---------" "$RESET"
+  printf '%s%-9s   %-17s %-29s %-37s %s%s\n' \
+    "$DIM" "--------" "-----------------" "----------------------------" "-------------------------------------" "---------" "$RESET"
 
   local provider provider_label provider_color dir file name usage marker status five week reset5 resetw pick
   for provider in codex claude; do
@@ -362,12 +373,10 @@ print_status() {
       [[ -e "$file" ]] || continue
       name="$(basename "$file" .json)"
       usage="$(usage_file "$provider" "$name")"
-      marker=" "
-      is_account_inactive "$provider" "$name" && marker="$(inactive_marker)"
-      [[ -n "$active_name" && "$active_name" == "$name" ]] && marker=">"
+      marker="$(account_marker "$provider" "$name" "$active_name")"
 
       if [[ ! -f "$usage" ]]; then
-        printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
+        printf '%s%-9s%s %s%-17s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$(fit_width "$name" 17)"
         if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
           format_codex_unlimited_badge
           printf ' '
@@ -384,8 +393,8 @@ print_status() {
         local full_error
         full_error="$(jq -r '.error // "unknown"' "$usage")"
         errors+=("$provider/$name: $full_error")
-        printf '%s%-9s%s %s%-18s %s' \
-          "$provider_color" "$provider_label" "$RESET" "$marker" "$name" "$RED"
+        printf '%s%-9s%s %s%-17s %s' \
+          "$provider_color" "$provider_label" "$RESET" "$marker" "$(fit_width "$name" 17)" "$RED"
         if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
           format_codex_unlimited_badge
           printf ' %s%s\n' "[7d !!!!!!!!!! ERR → see errors]" "$RESET"
@@ -399,7 +408,7 @@ print_status() {
       week="$(jq -r '.limits.weekly.used_percent // "-"' "$usage")"
       reset5="$(format_reset "$usage" five_hour time)"
       resetw="$(format_reset "$usage" weekly datetime)"
-      printf '%s%-9s%s %s%-18s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$name"
+      printf '%s%-9s%s %s%-17s ' "$provider_color" "$provider_label" "$RESET" "$marker" "$(fit_width "$name" 17)"
       if [[ "$provider" == "codex" && "$CODEX_FIVE_HOUR_LIMIT_ENABLED" != "1" ]]; then
         format_codex_unlimited_badge
         printf ' '
@@ -411,7 +420,8 @@ print_status() {
       printf ' %s\n' "$(pace_badge "$provider" "$name" "$pick")"
     done
   done
-  printf '%sPACE: ✓ on track · ▼ behind, min %%/day to not waste · ▲ hits cap before reset · ★ use first · %s inactive (switching blocked)%s\n' "$DIM" "$(inactive_marker)" "$RESET"
+  printf '%sPACE: ✓ on track · ▼ behind (min %%/day) · ▲ caps before reset · ★ use first   %s>%s%s active · %s%s%s%s inactive%s\n' \
+    "$DIM" "$GREEN" "$RESET" "$DIM" "$YELLOW" "$(inactive_marker)" "$RESET" "$DIM" "$RESET"
 
   if [[ "${#errors[@]}" -gt 0 ]]; then
     printf '\n%s%s[!] ERRORS%s\n' "$BOLD" "$RED" "$RESET"
